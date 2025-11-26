@@ -14,7 +14,12 @@ A robust, multi-turn appointment booking system powered by Google Agent Developm
 ## Architecture Overview
 
 ```
-User
+Telegram User
+  ↓
+TELEGRAM_AGENT (message interface)
+  • Receives messages from Telegram
+  • Manages user sessions
+  • Sends formatted responses back
   ↓
 GENERAL_AGENT (entry point, orchestration)
   ├──▶ CORRECTOR_AGENT
@@ -37,7 +42,8 @@ GENERAL_AGENT (entry point, orchestration)
 ├── agents/
 │   ├── general_agent.py
 │   ├── corrector_agent.py
-│   └── calendar_agent.py
+│   ├── calendar_agent.py
+│   └── telegram_agent.py      # Telegram bot interface
 ├── tools/
 │   ├── calendar_tools.py      # ← Our own custom tools (recommended)
 │   └── inventory_tools.py
@@ -50,6 +56,7 @@ GENERAL_AGENT (entry point, orchestration)
 │   ├── credentials.json       # Google OAuth service account
 │   └── settings.py
 ├── main.py                    # FastAPI + ADK entry point
+├── telegram_main.py           # Telegram bot entry point
 ├── requirements.txt
 └── README.md
 ```
@@ -63,8 +70,6 @@ GENERAL_AGENT (entry point, orchestration)
 | Easy to combine Calendar + Inventory checks in one tool | Atomic operations |
 | Can add business-specific logic (e.g., "Dr. Smith only mornings") | Impossible with generic MCP |
 
-→ Only ~250 lines of clean, well-tested code. Worth it.
-
 ## Session Memory (Mandatory for Good UX)
 
 Booking conversations are naturally multi-turn and can span hours/days.
@@ -76,14 +81,57 @@ We implement a hybrid memory strategy:
 | Short session (<2h) | ADK built-in `context.memory` | Automatic, zero code                           |
 | Long / resumable   | MySQL table `booking_sessions` | `memory/session_manager.py` loads/saves on every turn |
 
-### booking_sessions table
+### Database Tables
+
+#### clients table
+```sql
+CREATE TABLE clients (
+    client_id INT AUTO_INCREMENT PRIMARY KEY,
+    full_name VARCHAR(255) NOT NULL,
+    phone_number VARCHAR(20) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_email (email),
+    INDEX idx_phone (phone_number)
+);
+```
+
+### treatments table
+```sql
+CREATE TABLE treatments (
+    treatment_name VARCHAR(255) PRIMARY KEY,
+    treatment_price INT NOT NULL,
+);
+```
+
+#### patients table
+```sql
+CREATE TABLE patients (
+    patient_id INT AUTO_INCREMENT PRIMARY KEY,
+    full_name VARCHAR(255) NOT NULL,
+    phone_number VARCHAR(20) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_email (email),
+    INDEX idx_phone (phone_number)
+);
+```
+
+#### booking_sessions table
 ```sql
 CREATE TABLE booking_sessions (
     session_id VARCHAR(128) PRIMARY KEY,
     user_id VARCHAR(128),
+    client_id INT NOT NULL,
     state JSON NOT NULL,
+    number_of_people INT DEFAULT 1,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP
+    expires_at TIMESTAMP,
+    FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
+    INDEX idx_client (client_id),
+    INDEX idx_user (user_id)
 );
 ```
 
@@ -131,34 +179,16 @@ All tools use the official `google-api-python-client` with a service account (on
 
 ```bash
 # 1. Clone & install
-git clone <repo>
-cd appointment-system
+git clone 
+cd agent_kaggle
 pip install -r requirements.txt
 
-# 2. Google Calendar API
-#    - Enable Calendar API
-#    - Create service account → download credentials.json
-#    - Share target calendars with the service account email
-
-# 3. MySQL
-mysql < db/schema.sql
-
-# 4. Run
-uvicorn main:app --reload
 ```
 
-## Production Tips
+## For Production
 
-- Use Cloud SQL + Cloud Run / Vertex AI Agent Engine for scaling
+- Use Vertex AI Agent Engine for scaling
 - Add rate limiting & idempotency keys for create/update
 - Always store times in UTC, convert only at presentation
 - Implement "soft delete" + audit table for cancellations
 
-## Final Verdict
-
-This is a battle-tested, minimal-boilerplate, maximum-flexibility pattern used successfully in production by several startups in 2025.
-
-Build it exactly like this — you will ship fast and your users will love the experience.
-
-Happy coding!  
-(And yes — this README is deliberately written to be copy-pasted into your real repo)
