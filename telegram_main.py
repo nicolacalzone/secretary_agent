@@ -31,22 +31,15 @@ def main():
         )
     
     # Import dependencies (after env is loaded)
-    from agents.telegram_agent import TelegramAgent
-    from agents.general_agent import general_agent
-    from memory.session_manager import SessionManager
-    from db.mysql_client import MySQLClient
-    
-    # Initialize database and session manager
-    logger.info("Initializing database connection...")
-    db_client = MySQLClient()
-    session_manager = SessionManager(db_client)
+    from telegram_agent import TelegramAgent
+    from agents.general_agent import general_runner, session_service
     
     # Create Telegram agent
     logger.info("Creating Telegram agent...")
     telegram_agent = TelegramAgent(
         token=telegram_token,
-        general_agent=general_agent,
-        session_manager=session_manager
+        general_runner=general_runner,
+        session_service=session_service
     )
     
     # Start bot

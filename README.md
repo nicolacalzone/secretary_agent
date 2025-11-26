@@ -97,6 +97,14 @@ CREATE TABLE clients (
 );
 ```
 
+### treatments table
+```sql
+CREATE TABLE treatments (
+    treatment_name VARCHAR(255) PRIMARY KEY,
+    treatment_price INT NOT NULL,
+);
+```
+
 #### patients table
 ```sql
 CREATE TABLE patients (
