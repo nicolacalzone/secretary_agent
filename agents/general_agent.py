@@ -13,7 +13,8 @@ from . import (
     InMemorySessionService,
     App,
     ResumabilityConfig,
-    LoggingPlugin
+    LoggingPlugin,
+    InMemoryMemoryService
 )
 
 # Import the calendar_agent from the agents package
@@ -44,7 +45,8 @@ general_app = App(
 session_service = InMemorySessionService()
 general_runner = Runner(
     app=general_app,  # Pass app instead of agent
-    session_service=session_service
+    session_service=session_service,
+    memory_service=InMemoryMemoryService() # Add memory service
 )
 
 

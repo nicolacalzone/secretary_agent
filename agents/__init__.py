@@ -22,6 +22,7 @@ from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
 from mcp import StdioServerParameters
 from google.adk.apps.app import App, ResumabilityConfig
 from google.adk.tools.function_tool import FunctionTool
+from google.adk.memory import InMemoryMemoryService
 
 # Shared configurations
 retry_config = types.HttpRetryOptions(
@@ -43,4 +44,5 @@ __all__ = [
     'ToolContext',
     'BuiltInCodeExecutor',
     'retry_config',
+    'InMemoryMemoryService'
 ]
