@@ -13,6 +13,7 @@ from . import (
     InMemorySessionService,
     App,
     ResumabilityConfig,
+    LoggingPlugin
 )
 
 # Import the calendar_agent from the agents package
@@ -35,7 +36,8 @@ general_agent = LlmAgent(
 general_app = App(
     name="booking_coordinator",
     root_agent=general_agent,
-    resumability_config=ResumabilityConfig(is_resumable=True)
+    resumability_config=ResumabilityConfig(is_resumable=True),
+    plugins=[LoggingPlugin()]  # Enable logging plugin
 )
 
 # Create session service and runner
