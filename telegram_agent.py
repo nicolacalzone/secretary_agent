@@ -148,12 +148,6 @@ class TelegramAgent:
                         await update.message.reply_text(response_text)
                     else:
                         await update.message.reply_text("Booking processed!")
-                    # Extract and send response
-                    response_text = self._extract_text_from_events(events)
-                    if response_text:
-                        await update.message.reply_text(response_text)
-                    else:
-                        await update.message.reply_text("Booking processed!")
                     
                     return
                 else:
@@ -178,8 +172,28 @@ class TelegramAgent:
                     events.append(event)
             except TypeError as te:
                 logger.error(f"TypeError during agent execution: {te}", exc_info=True)
+                # Check if we got any events before the error
+                if events:
+                    # Try to extract response from events we did get
+                    response_text = self._extract_text_from_events(events)
+                    if response_text and response_text != "Processing...":
+                        await update.message.reply_text(response_text)
+                        return
+                # If no useful events, show error
                 await update.message.reply_text(
                     "😓 I encountered a technical issue. Please try rephrasing your request."
+                )
+                return
+            except Exception as e:
+                logger.error(f"Unexpected error during agent execution: {e}", exc_info=True)
+                # Check if we got any events before the error
+                if events:
+                    response_text = self._extract_text_from_events(events)
+                    if response_text and response_text != "Processing...":
+                        await update.message.reply_text(response_text)
+                        return
+                await update.message.reply_text(
+                    "😓 Sorry, I encountered an error processing your request."
                 )
                 return
             
