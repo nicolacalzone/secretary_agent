@@ -3,19 +3,12 @@ Telegram Bot Entry Point
 Run this to start the Telegram interface for the booking system
 """
 import os
-import logging
-import asyncio
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
-# Setup logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# Logging removed per user request
 
 
 def main():
@@ -34,8 +27,7 @@ def main():
     from telegram_agent import TelegramAgent
     from agents.general_agent import general_runner, session_service
     
-    # Create Telegram agent
-    logger.info("Creating Telegram agent...")
+    # Create Telegram agent (uses implicit caching via Gemini 2.5)
     telegram_agent = TelegramAgent(
         token=telegram_token,
         general_runner=general_runner,
@@ -43,19 +35,13 @@ def main():
     )
     
     # Start bot
-    logger.info("=" * 60)
-    logger.info("🤖 TELEGRAM BOOKING BOT STARTED")
-    logger.info("=" * 60)
-    logger.info("Bot is now listening for messages...")
-    logger.info("Press Ctrl+C to stop")
-    logger.info("=" * 60)
+    # Startup messages removed
     
     try:
         telegram_agent.run()
     except KeyboardInterrupt:
-        logger.info("\n🛑 Shutting down bot...")
+        pass
     except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
         raise
 
 

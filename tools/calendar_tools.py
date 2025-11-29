@@ -9,24 +9,225 @@ import datetime
 import time
 from zoneinfo import ZoneInfo
 import subprocess
+from typing import Tuple, List, Optional
 
 
 # read/write ops
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
+
+def check_treatment_type(treatment_type: Optional[str] = None) -> dict:
+    """Check if a treatment type is valid and return available treatments.
+    
+    When called without arguments, returns all available treatment types.
+    When called with a treatment_type, validates if it's offered.
+    
+    Args:
+        treatment_type (str, optional): Treatment type to validate. If None, returns all treatments.
+    
+    Returns:
+        dict: Dictionary with treatment information:
+            - status (str): 'approved' or 'rejected'
+            - is_valid (bool): Whether the treatment is valid (if treatment_type provided)
+            - treatments (list): List of all available treatments
+            - message (str): Description message
+    
+    Examples:
+        >>> check_treatment_type()
+        {'status': 'approved', 'treatments': [...], 'message': 'Available treatments listed'}
+        
+        >>> check_treatment_type("General Consultation")
+        {'status': 'approved', 'is_valid': True, 'treatment': 'General Consultation', 'message': 'Treatment is available'}
+    """
+    db_treatments = [
+        "General Consultation",
+        "Pediatric Dental Care",
+        "Wisdom Tooth Removal",
+        "Nail Polish",
+        "Nail Repair",
+        "Nail Filling",
+        "Nail Strengthening",
+        "Nail Sculpting",
+        "Nail Overlay",
+        "Nail Extension",
+        "Foot Asportation",
+        "Foot Resection",
+        "Foot Cleaning",
+        "Foot Debridement",
+        "Foot Dressing",
+        "Foot Bandaging"
+    ]
+
+    if treatment_type is None:
+        return {
+            'status': 'approved',
+            'treatments': db_treatments,
+            'message': f'We offer {len(db_treatments)} different treatments. See the treatments list for details.'
+        }
+
+    # Normalize for case-insensitive comparison
+    treatment_lower = treatment_type.lower()
+    is_valid = any(t.lower() == treatment_lower for t in db_treatments)
+    
+    if is_valid:
+        # Find the properly capitalized version
+        proper_name = next(t for t in db_treatments if t.lower() == treatment_lower)
+        return {
+            'status': 'approved',
+            'is_valid': True,
+            'treatment': proper_name,
+            'message': f'"{proper_name}" is available for booking'
+        }
+    else:
+        return {
+            'status': 'rejected',
+            'is_valid': False,
+            'treatment': treatment_type,
+            'treatments': db_treatments,
+            'message': f'"{treatment_type}" is not offered. Please choose from the available treatments list.'
+        }
+
+
+def return_available_slots(date: str) -> dict:
+    """Return a list of available 1-hour slots for the given date (9 AM to 5 PM).
+    
+    Checks all hourly slots from 9:00 to 16:00 (last slot ends at 17:00) and returns
+    only those that are not occupied and fall within business hours.
+    
+    Args:
+        date (str): Date in various formats (YYYY-MM-DD, DD.MM.YYYY, etc.)
+    
+    Returns:
+        dict: Dictionary with available slots:
+            - status (str): 'approved' or 'rejected'
+            - date (str): The date checked (ISO format)
+            - available_slots (list): List of available time slots in HH:MM format
+            - message (str): Description message
+    
+    Examples:
+        >>> return_available_slots("2025-11-28")
+        {'status': 'approved', 'date': '2025-11-28', 'available_slots': ['09:00', '10:00', ...], 'message': '5 slots available'}
+    """
+    # Validate work day
+    if is_it_holiday(date):
+        return {
+            'status': 'rejected',
+            'date': date,
+            'available_slots': [],
+            'message': f'{date} is a weekend or holiday - no appointments available'
+        }
+    
+    try:
+        service = get_calendar_service()
+        local_tz = ZoneInfo('Europe/Rome')
+        dt = parse_date_to_datetime(date)
+        
+        # Get all events for this day
+        day_start = dt.replace(hour=0, minute=0, second=0, tzinfo=local_tz)
+        day_end = dt.replace(hour=23, minute=59, second=59, tzinfo=local_tz)
+        
+        events_result = service.events().list(
+            calendarId='primary',
+            timeMin=day_start.isoformat(),
+            timeMax=day_end.isoformat(),
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute()
+        
+        events = events_result.get('items', [])
+        
+        # Check each hour from 9 AM to 4 PM (last slot 4-5 PM)
+        available_slots = []
+        for hour in range(9, 17):  # 9 AM to 4 PM (5 PM is end time)
+            time_str = f"{hour:02d}:00"
+            slot_start = dt.replace(hour=hour, minute=0, second=0, tzinfo=local_tz)
+            slot_end = slot_start + datetime.timedelta(hours=1)
+            
+            # Check if this slot conflicts with any event
+            is_occupied = False
+            for event in events:
+                event_start_str = event['start'].get('dateTime', event['start'].get('date'))
+                event_end_str = event['end'].get('dateTime', event['end'].get('date'))
+                
+                # Parse event times
+                if 'T' in event_start_str:
+                    event_start = datetime.datetime.fromisoformat(event_start_str.replace('Z', '+00:00'))
+                    event_end = datetime.datetime.fromisoformat(event_end_str.replace('Z', '+00:00'))
+                    
+                    # Check for overlap
+                    if not (slot_end <= event_start or slot_start >= event_end):
+                        is_occupied = True
+                        break
+            
+            if not is_occupied:
+                available_slots.append(time_str)
+        
+        iso_date = dt.strftime('%Y-%m-%d')
+        return {
+            'status': 'approved',
+            'date': iso_date,
+            'available_slots': available_slots,
+            'message': f'{len(available_slots)} slot(s) available on {iso_date}'
+        }
+    
+    except Exception as e:
+        return {
+            'status': 'rejected',
+            'date': date,
+            'available_slots': [],
+            'message': f'Error checking availability: {str(e)}'
+        }
+
+
+def parse_date_to_datetime(date_str: str) -> datetime.datetime:
+    """Parse a date string in various formats to a datetime object.
+    
+    Args:
+        date_str (str): Date in various formats (YYYY-MM-DD, DD.MM.YYYY, DD/MM/YYYY, etc.)
+    
+    Returns:
+        datetime.datetime: Parsed datetime object (date only, time set to 00:00:00)
+    
+    Raises:
+        ValueError: If date cannot be parsed
+    """
+    date_formats = [
+        '%Y-%m-%d',      # 2025-11-28 (ISO format)
+        '%d.%m.%Y',      # 28.11.2025
+        '%d/%m/%Y',      # 28/11/2025
+        '%d-%m-%Y',      # 28-11-2025
+        '%Y/%m/%d',      # 2025/11/28
+        '%Y.%m.%d',      # 2025.11.28
+        '%d %m %Y',      # 28 11 2025
+        '%B %d, %Y',     # November 28, 2025
+        '%b %d, %Y',     # Nov 28, 2025
+        '%d %B %Y',      # 28 November 2025
+        '%d %b %Y',      # 28 Nov 2025
+    ]
+    
+    for fmt in date_formats:
+        try:
+            return datetime.datetime.strptime(date_str, fmt)
+        except ValueError:
+            continue
+    
+    # If all formats fail, raise error
+    raise ValueError(f"Unable to parse date: '{date_str}'. Supported formats: YYYY-MM-DD, DD.MM.YYYY, DD/MM/YYYY, DD-MM-YYYY, 'DD Month YYYY', etc.")
+
 def is_it_holiday(date: str) -> bool:
     """Check if the given date is a holiday (weekend) using Google Calendar API.
     
     Args:
-        date (str): Date in ISO format (YYYY-MM-DD) to check.
+        date (str): Date in various formats (YYYY-MM-DD, DD.MM.YYYY, DD/MM/YYYY, etc.)
     Returns:
         bool: True if the date is a holiday (Saturday or Sunday), False otherwise.
     """
-    dt = datetime.datetime.fromisoformat(date)
+    dt = parse_date_to_datetime(date)
+    
     # Check if it is Christmas, New Year, or weekend
-    if dt.month == 12 and dt.day in [8, 24, 25, 26]:  #
+    if dt.month == 12 and dt.day in [8, 24, 25, 26]:
         return True
-    if dt.month == 1 and dt.day == 1:  #
+    if dt.month == 1 and dt.day == 1:
         return True
     if dt.weekday() >= 5:  # Saturday or Sunday
         return True
@@ -78,7 +279,10 @@ def is_it_in_work_hours(date: str, time: str) -> bool:
     
     # Create timezone-aware datetime in Europe/Rome timezone
     rome_tz = ZoneInfo('Europe/Rome')
-    dt = datetime.datetime.fromisoformat(f"{date}T{time}").replace(tzinfo=rome_tz)
+    dt = parse_date_to_datetime(date)
+    # Add time component
+    time_parts = time.split(':')
+    dt = dt.replace(hour=int(time_parts[0]), minute=int(time_parts[1]), tzinfo=rome_tz)
     
     # Check if weekday (Mon-Fri)
     if dt.weekday() >= 5:
@@ -361,7 +565,9 @@ def find_next_available_slot(date: str, time: str, max_attempts: int = 10) -> di
     try:
         service = get_calendar_service()
         local_tz = ZoneInfo('Europe/Rome')
-        current_datetime = datetime.datetime.fromisoformat(f"{date}T{time}:00").replace(tzinfo=local_tz)
+        dt = parse_date_to_datetime(date)
+        time_parts = time.split(':')
+        current_datetime = dt.replace(hour=int(time_parts[0]), minute=int(time_parts[1]), tzinfo=local_tz)
         
         for attempt in range(max_attempts):
             # Check this slot
@@ -486,7 +692,9 @@ def check_availability(date: str, time: str, tool_context: ToolContext) -> dict:
         
         # Create time range for the requested slot (1 hour duration) with local timezone
         local_tz = ZoneInfo('Europe/Rome')
-        start_datetime = datetime.datetime.fromisoformat(f"{date}T{time}:00").replace(tzinfo=local_tz)
+        dt = parse_date_to_datetime(date)
+        time_parts = time.split(':')
+        start_datetime = dt.replace(hour=int(time_parts[0]), minute=int(time_parts[1]), tzinfo=local_tz)
         end_datetime = start_datetime + datetime.timedelta(hours=1)
         
         # Query calendar for events in this time range
@@ -561,7 +769,7 @@ def check_availability(date: str, time: str, tool_context: ToolContext) -> dict:
             'message': f'Failed to check availability: {str(e)}'
         }
 
-def insert_appointment(full_name: str, email: str, phone: str, date: str, time: str, tool_context: ToolContext = None) -> dict:
+def insert_appointment(full_name: str, email: str, phone: str, date: str, time: str, treatment: str = "General Consultation", tool_context: ToolContext = None) -> dict:
     """Insert a new appointment into Google Calendar.
     
     IMPORTANT: This function will ONLY insert if the slot is available.
@@ -573,6 +781,7 @@ def insert_appointment(full_name: str, email: str, phone: str, date: str, time: 
         phone (str): Phone number of the person booking the appointment
         date (str): Date of the appointment
         time (str): Time of the appointment
+        treatment (str, optional): Type of treatment/service. Defaults to "General Consultation"
         tool_context (ToolContext): Context to track if availability was checked
 
     Returns:
@@ -590,7 +799,9 @@ def insert_appointment(full_name: str, email: str, phone: str, date: str, time: 
         
         # CRITICAL: Final availability check before inserting
         local_tz = ZoneInfo('Europe/Rome')
-        start_datetime_obj = datetime.datetime.fromisoformat(f"{date}T{time}:00").replace(tzinfo=local_tz)
+        dt = parse_date_to_datetime(date)
+        time_parts = time.split(':')
+        start_datetime_obj = dt.replace(hour=int(time_parts[0]), minute=int(time_parts[1]), tzinfo=local_tz)
         end_datetime_obj = start_datetime_obj + datetime.timedelta(hours=1)
         
         # Check for conflicts
@@ -623,21 +834,25 @@ def insert_appointment(full_name: str, email: str, phone: str, date: str, time: 
                 }
         
         # Slot is free, proceed with booking
-        local_tz = get_local_timezone()
-        start_datetime = f"{date}T{time}:00"
-        end_time = datetime.datetime.fromisoformat(start_datetime) + datetime.timedelta(hours=1)
+        local_tz = ZoneInfo('Europe/Rome')
+        local_tz_str = 'Europe/Rome'
+        dt = parse_date_to_datetime(date)
+        time_parts = time.split(':')
+        start_dt = dt.replace(hour=int(time_parts[0]), minute=int(time_parts[1]), tzinfo=local_tz)
+        start_datetime = start_dt.isoformat()
+        end_time = start_dt + datetime.timedelta(hours=1)
         end_datetime = end_time.isoformat()
         
         event = {
-            'summary': f'Appointment with {full_name}',
-            'description': f'Phone: {phone}',
+            'summary': f'{treatment} - {full_name}',
+            'description': f'Treatment: {treatment}\nPhone: {phone}',
             'start': {
                 'dateTime': start_datetime,
-                'timeZone': local_tz,
+                'timeZone': local_tz_str,
             },
             'end': {
                 'dateTime': end_datetime,
-                'timeZone': local_tz,
+                'timeZone': local_tz_str,
             },
             'attendees': [
                 {'email': email},
@@ -654,7 +869,8 @@ def insert_appointment(full_name: str, email: str, phone: str, date: str, time: 
             'phone': phone,
             'date': date,
             'time': time,
-            'message': f'Appointment successfully booked for {full_name} on {date} at {time}'
+            'treatment': treatment,
+            'message': f'{treatment} appointment successfully booked for {full_name} on {date} at {time}'
         }
     
     except HttpError as error:
@@ -675,17 +891,20 @@ def delete_appointment(email: str = None, phone: str = None) -> dict:
     Args:
         email (str, optional): Email address to search for in appointment attendees.
         phone (str, optional): Phone number to search for in appointment descriptions.
-        
-
-    Args:
-        email (str, optional): Email address to search for in appointment attendees;
-        phone (str, optional): Phone number to search for in appointment descriptions;
-        new_date (str): New date for the appointment;
-        new_time (str): New time for the appointment;
     
     Returns:
-        dict: Dictionary with rescheduling status.
+        dict: Dictionary with cancellation status:
+            - status (str): 'approved' if cancelled, 'rejected' if error or not found
+            - order_id (str): Event ID of cancelled appointment (if successful)
+            - event_name (str): Name/summary of cancelled event (if successful)
+            - message (str): Confirmation or error message
     """
+    # Validate inputs
+    if not email and not phone:
+        return {
+            'status': 'rejected',
+            'message': 'Please provide either an email address or phone number to cancel the appointment'
+        }
 
     try:
         service = get_calendar_service()
@@ -702,6 +921,12 @@ def delete_appointment(email: str = None, phone: str = None) -> dict:
         
         events = events_result.get('items', [])
         
+        if not events:
+            return {
+                'status': 'rejected',
+                'message': 'No upcoming appointments found'
+            }
+        
         # Find matching event
         for event in events:
             attendees = event.get('attendees', [])
@@ -710,50 +935,56 @@ def delete_appointment(email: str = None, phone: str = None) -> dict:
             email_matches = email and any(att.get('email') == email for att in attendees)
             phone_matches = phone and phone in description
             
-            # If both email and phone provided, both must match for identity verification
+            # Determine if this event matches the criteria
+            match_found = False
+            verification_method = ""
+            
             if email and phone:
+                # Both provided - both must match for identity verification
                 if email_matches and phone_matches:
-                    event_summary = event.get('summary')
-                    event_id = event['id']
-                    service.events().delete(calendarId='primary', eventId=event_id).execute()
-                    return {
-                        'status': 'approved',
-                        'order_id': event_id,
-                        'event_name': event_summary,
-                        'message': f"Appointment '{event_summary}' successfully cancelled (verified with email and phone)"
-                    }
-            # If only email provided, check email
+                    match_found = True
+                    verification_method = "verified with email and phone"
             elif email and email_matches:
-                event_summary = event.get('summary')
-                event_id = event['id']
-                service.events().delete(calendarId='primary', eventId=event_id).execute()
-                return {
-                    'status': 'approved',
-                    'order_id': event_id,
-                    'event_name': event_summary,
-                    'message': f"Appointment '{event_summary}' successfully cancelled"
-                }
-            # If only phone provided, check phone
+                # Only email provided and it matches
+                match_found = True
+                verification_method = f"for {email}"
             elif phone and phone_matches:
-                event_summary = event.get('summary')
+                # Only phone provided and it matches
+                match_found = True
+                verification_method = f"for {phone}"
+            
+            if match_found:
+                event_summary = event.get('summary', 'Untitled Event')
                 event_id = event['id']
+                event_start = event['start'].get('dateTime', event['start'].get('date'))
+                
+                # Delete the event
                 service.events().delete(calendarId='primary', eventId=event_id).execute()
+                
                 return {
                     'status': 'approved',
                     'order_id': event_id,
                     'event_name': event_summary,
-                    'message': f"Appointment '{event_summary}' successfully cancelled"
+                    'event_time': event_start,
+                    'message': f"✓ Appointment '{event_summary}' on {event_start.split('T')[0]} has been successfully cancelled ({verification_method})"
                 }
+        
+        # No matching event found
+        search_criteria = []
+        if email:
+            search_criteria.append(f"email: {email}")
+        if phone:
+            search_criteria.append(f"phone: {phone}")
         
         return {
             'status': 'rejected',
-            'message': 'No matching appointment found to cancel'
+            'message': f"No upcoming appointment found matching {' and '.join(search_criteria)}"
         }
     
     except HttpError as error:
         return {
             'status': 'rejected',
-            'message': f'An error occurred: {error}'
+            'message': f'Google Calendar API error: {error}'
         }
     except Exception as e:
         return {
@@ -850,7 +1081,9 @@ def move_appointment(email: str = None, phone: str = None, new_date: str = None,
                 
                 # Check for conflicts in the new time slot (excluding current event)
                 local_tz = ZoneInfo('Europe/Rome')
-                start_datetime_obj = datetime.datetime.fromisoformat(f"{new_date}T{new_time}:00").replace(tzinfo=local_tz)
+                dt = parse_date_to_datetime(new_date)
+                time_parts = new_time.split(':')
+                start_datetime_obj = dt.replace(hour=int(time_parts[0]), minute=int(time_parts[1]), tzinfo=local_tz)
                 end_datetime_obj = start_datetime_obj + datetime.timedelta(hours=1)
                 
                 conflicts_result = service.events().list(
@@ -908,18 +1141,20 @@ def move_appointment(email: str = None, phone: str = None, new_date: str = None,
                         }
                 
                 # New slot is available - proceed with move
-                local_tz = get_local_timezone()
-                start_datetime = f"{new_date}T{new_time}:00"
-                end_time = datetime.datetime.fromisoformat(start_datetime) + datetime.timedelta(hours=1)
-                end_datetime = end_time.isoformat()
+                local_tz_str = get_local_timezone()
+                local_tz = ZoneInfo(local_tz_str)
+                dt = parse_date_to_datetime(new_date)
+                time_parts = new_time.split(':')
+                start_dt = dt.replace(hour=int(time_parts[0]), minute=int(time_parts[1]), tzinfo=local_tz)
+                end_dt = start_dt + datetime.timedelta(hours=1)
                 
                 event['start'] = {
-                    'dateTime': start_datetime,
-                    'timeZone': local_tz,
+                    'dateTime': start_dt.isoformat(),
+                    'timeZone': local_tz_str,
                 }
                 event['end'] = {
-                    'dateTime': end_datetime,
-                    'timeZone': local_tz,
+                    'dateTime': end_dt.isoformat(),
+                    'timeZone': local_tz_str,
                 }
                 
                 updated_event = service.events().update(
