@@ -215,6 +215,7 @@ class TelegramAgent:
                     )
             else:
                 # No approval needed - normal response
+                logger.info(f"Agent response events: {events}")
                 response_text = self._extract_text_from_events(events)
                 if response_text:
                     await update.message.reply_text(response_text)
