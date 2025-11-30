@@ -105,10 +105,10 @@ corrector_agent = LlmAgent(
 find_slot_agent = LlmAgent(
     name="FindAvailableSlotAgent",
     model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
-    instruction="""Find available appointment slots and treatment information on {Validated_datetime}.
+    instruction="""Find available appointment slots and treatment information on {validated_datetime}.
     
     Workflow:
-    1. Use the data incoming in {Validated_datetime} context if available. If necessary, use the corrector_agent to establish the current date and obtain {Validated_datetime}.
+    1. Use the data incoming in {validated_datetime} context if available. If necessary, use the corrector_agent to establish the current date and obtain {Validated_datetime}.
     2. Execute appropriate query:
        - To List treatments use check_treatment_type()
        - To find Slots on date use return_available_slots(iso_date)
@@ -251,19 +251,6 @@ These queries can interrupt the booking workflow at any stage:
 
 **Detection Keywords**: "slot", "available", "availability", "treatment", "next available", "show availability"
 
-**How to Handle:**
-1. **Immediately** answer the query:
-   - **Available slots / availability queries** → Delegate to `date_and_slot_finder_agent`
-   - **Treatment list** → Call `check_treatment_type()` directly
-   - **Current date** → Call `get_current_date()` directly
-
-2. After answering, if booking is incomplete:
-   - Acknowledge the answer you just provided
-   - Gently prompt for the next missing field: "Great! Now, to complete your booking, may I have your [missing field]?"
-
-**Important**: Never block these queries behind missing contact information.
-
----
 
 ## OTHER OPERATIONS
 
@@ -308,58 +295,11 @@ These queries can interrupt the booking workflow at any stage:
 - `move_appointment(email OR phone, new_date, new_time)` - Reschedules booking
 
 **Always use explicit named parameters** as defined in tool signatures.
-
----
-
-## Example Flow
-
-**User**: "I need an appointment for the 24th"
-
-**Agent**:
-1. Call `get_current_date()` → Nov 30, 2025
-2. Delegate to `CorrectorAgent("the 24th")` → "2025-12-24"
-3. Respond: "I understand you want Tuesday, December 24, 2025. Is that correct?"
-4. [User confirms]
-5. "Great! What time works best for you?"
-6. [User provides time]
-7. Delegate to `date_and_slot_finder_agent("2025-12-24")` to verify slots available
-8. "Perfect, that time is available. May I have your full name?"
-9. [Continue collecting email, phone]
-10. Once all fields collected → `check_availability(date, time)` → `insert_appointment(...)`
-11. "✓ Your appointment is confirmed for December 24, 2025 at [time]. [Calendar link]"
-
----
-
-## Example: Interruptible Query
-
-**User**: "What slots are available tomorrow?"
-
-**Agent**:
-1. Call `get_current_date()` → Nov 30, 2025
-2. Delegate to `CorrectorAgent("tomorrow")` → "2025-12-01"
-3. Delegate to `date_and_slot_finder_agent("2025-12-01")`
-4. Respond: "Here are the available slots for December 1, 2025: [list slots from agent response]"
-5. If booking in progress: "Which time would you prefer?"
-
----
-
-## Example: Reschedule with Verification
-
-**User**: "Can I reschedule my appointment to next Wednesday at 2pm?"
-
-**Agent**:
-1. Call `get_current_date()` → Nov 30, 2025
-2. Delegate to `CorrectorAgent("next Wednesday")` → "2025-12-03"
-3. Delegate to `date_and_slot_finder_agent("2025-12-03")` to check availability
-4. If 14:00 slot available → "Yes, 2pm is available on December 3rd. May I have your email or phone to locate your appointment?"
-5. [User provides identifier]
-6. Call `move_appointment(email, "2025-12-03", "14:00")`
-7. "✓ Your appointment has been rescheduled to Wednesday, December 3, 2025 at 14:00.
     """,
     sub_agents=[date_and_slot_finder_agent, appointment_crud_agent],
     tools = [
         FunctionTool(func=get_current_date),
-        # AgentTool(agent=corrector_agent),
+        AgentTool(agent=corrector_agent),
         # AgentTool(agent=find_slot_agent),
         FunctionTool(func=check_treatment_type),
         # FunctionTool(func=return_available_slots),
