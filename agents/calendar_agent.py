@@ -47,7 +47,8 @@ corrector_agent = LlmAgent(
     You are an agent that identifies and corrects date and time inputs.
     If the user provides relative dates ("today", "tomorrow", "next Monday"), call get_current_date() and then parse_date_expression() to resolve them.
     
-    If the user provides only the date like 24th, then assume it as the next occurrence of that date in the future. call get_current_date() to understand the current date context.
+    If the user provides only the date like 24th, then assume it as the next occurrence of that date in the future. call get_current_date() to understand the current date context. use current date to determine the correct month and year the user is referring to. 
+    Remember to always return the date you determined in ISO format (YYYY-MM-DD).
     
     Parse date expressions into ISO format (YYYY-MM-DD) using parse_date_expression() function and normalize time to 24-hour format.
 

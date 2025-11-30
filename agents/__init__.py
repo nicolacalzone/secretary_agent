@@ -22,6 +22,7 @@ from google.adk.apps.app import App, ResumabilityConfig
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.agents.context_cache_config import ContextCacheConfig
 
+
 import uuid
 
 # Shared configurations
@@ -44,5 +45,6 @@ __all__ = [
     'ToolContext',
     'BuiltInCodeExecutor',
     'retry_config',
-    'InMemoryMemoryService'
+    'InMemoryMemoryService',
+    'SequentialAgent'
 ]
