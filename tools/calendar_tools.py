@@ -4,16 +4,36 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.adk.tools.tool_context import ToolContext
+import os
 import os.path
 import datetime
 import time
 from zoneinfo import ZoneInfo
 import subprocess
 from typing import Tuple, List, Optional
+import re
+from urllib.parse import quote
 
 
 # read/write ops
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
+
+
+# Normalization helpers (email lowercased, phone digits only preserving leading '+')
+def normalize_email(email: Optional[str]) -> Optional[str]:
+    if not email:
+        return None
+    return email.strip().lower()
+
+
+def normalize_phone(phone: Optional[str]) -> Optional[str]:
+    if not phone:
+        return None
+    phone = phone.strip()
+    # Preserve leading '+' if present, remove non-digits otherwise
+    leading_plus = phone.startswith('+')
+    digits = re.sub(r'\D', '', phone)
+    return ('+' + digits) if leading_plus else digits
 
 
 def check_treatment_type(treatment_type: Optional[str] = None) -> dict:
@@ -787,6 +807,25 @@ def insert_appointment(full_name: str, email: str, phone: str, date: str, time: 
     Returns:
         dict: Dictionary with appointment status.
     """
+    # Validate required fields explicitly (avoid silent booking with missing info)
+    missing = []
+    if not full_name or not full_name.strip():
+        missing.append('name')
+    if not email or not email.strip():
+        missing.append('email')
+    if not phone or not phone.strip():
+        missing.append('phone')
+    if not date or not date.strip():
+        missing.append('date')
+    if not time or not time.strip():
+        missing.append('time')
+    if missing:
+        return {
+            'status': 'rejected',
+            'missing': missing,
+            'message': f"Cannot book yet. Missing required field(s): {', '.join(missing)}"
+        }
+
     # First, validate work hours and holidays
     if not is_it_in_work_hours(date, time):
         return {
@@ -857,20 +896,66 @@ def insert_appointment(full_name: str, email: str, phone: str, date: str, time: 
             'attendees': [
                 {'email': email},
             ],
+            # Store normalized identifiers for robust lookup
+            'extendedProperties': {
+                'private': {
+                    'email_norm': normalize_email(email),
+                    'phone_norm': normalize_phone(phone)
+                }
+            }
         }
         
-        event = service.events().insert(calendarId='primary', body=event).execute()
+        # Allow inserting into a public-facing calendar when configured
+        target_calendar_id = os.getenv('PUBLIC_CALENDAR_ID', 'primary')
+        event = service.events().insert(calendarId=target_calendar_id, body=event).execute()
+        # Build a public "Add to Google Calendar" template link (shareable without requiring access)
+        try:
+            # Convert start/end to UTC for template link
+            start_utc = start_dt.astimezone(datetime.timezone.utc)
+            end_utc = end_time.astimezone(datetime.timezone.utc)
+            fmt = "%Y%m%dT%H%M%SZ"
+            dates_param = f"{start_utc.strftime(fmt)}/{end_utc.strftime(fmt)}"
+
+            text_param = quote(f"{treatment} - {full_name}")
+            details_lines = [
+                f"Treatment: {treatment}",
+                f"Name: {full_name}",
+                f"Email: {email}",
+                f"Phone: {phone}",
+            ]
+            details_param = quote("\n".join(details_lines))
+
+            public_add_link = (
+                f"https://calendar.google.com/calendar/render?action=TEMPLATE"
+                f"&text={text_param}&dates={dates_param}&details={details_param}"
+            )
+        except Exception:
+            public_add_link = None
+
+        # Prefer the shareable add-to-calendar link in the message to avoid private links confusion
+        lines = [
+            f"Confirmed ✅ {treatment} for {full_name} on {date} at {time}.",
+            f"Email: {email}, Phone: {phone}.",
+        ]
+        if public_add_link:
+            lines.append(f"Public add-to-calendar link: {public_add_link}")
+        # Owner/private htmlLink (may require calendar access)
+        if event.get('htmlLink'):
+            lines.append(f"Owner calendar link (may be private): {event.get('htmlLink')}")
+        confirmation_msg = " ".join(lines)
         return {
             'status': 'approved',
             'order_id': event.get('id'),
             'link': event.get('htmlLink'),
+            'public_add_link': public_add_link,
+            'calendar_id': target_calendar_id,
             'full_name': full_name,
             'email': email,
             'phone': phone,
             'date': date,
             'time': time,
             'treatment': treatment,
-            'message': f'{treatment} appointment successfully booked for {full_name} on {date} at {time}'
+            'message': confirmation_msg
         }
     
     except HttpError as error:
@@ -927,40 +1012,50 @@ def delete_appointment(email: str = None, phone: str = None) -> dict:
                 'message': 'No upcoming appointments found'
             }
         
-        # Find matching event
+        # Normalize provided identifiers
+        email_norm = normalize_email(email) if email else None
+        phone_norm = normalize_phone(phone) if phone else None
+
         for event in events:
             attendees = event.get('attendees', [])
-            description = event.get('description', '')
-            
-            email_matches = email and any(att.get('email') == email for att in attendees)
-            phone_matches = phone and phone in description
-            
-            # Determine if this event matches the criteria
-            match_found = False
-            verification_method = ""
-            
-            if email and phone:
-                # Both provided - both must match for identity verification
-                if email_matches and phone_matches:
-                    match_found = True
-                    verification_method = "verified with email and phone"
-            elif email and email_matches:
-                # Only email provided and it matches
-                match_found = True
-                verification_method = f"for {email}"
-            elif phone and phone_matches:
-                # Only phone provided and it matches
-                match_found = True
-                verification_method = f"for {phone}"
-            
-            if match_found:
+            description = event.get('description', '') or ''
+            props = event.get('extendedProperties', {}).get('private', {})
+            stored_email_norm = props.get('email_norm')
+            stored_phone_norm = props.get('phone_norm')
+
+            # Legacy fallback (events created before normalization): derive digits from description
+            description_digits = normalize_phone(description)
+
+            email_matches = False
+            phone_matches = False
+
+            if email_norm:
+                # Match against normalized stored value OR normalized attendees
+                if stored_email_norm and stored_email_norm == email_norm:
+                    email_matches = True
+                else:
+                    email_matches = any(normalize_email(att.get('email')) == email_norm for att in attendees)
+
+            if phone_norm:
+                if stored_phone_norm and stored_phone_norm == phone_norm:
+                    phone_matches = True
+                else:
+                    phone_matches = phone_norm and phone_norm in description_digits
+
+            # OR semantics: any matching identifier is enough
+            if (email_norm or phone_norm) and (email_matches or phone_matches):
+                verification_parts = []
+                if email_matches:
+                    verification_parts.append('email')
+                if phone_matches:
+                    verification_parts.append('phone')
+                verification_method = 'verified via ' + ' & '.join(verification_parts)
+
                 event_summary = event.get('summary', 'Untitled Event')
                 event_id = event['id']
                 event_start = event['start'].get('dateTime', event['start'].get('date'))
-                
-                # Delete the event
+
                 service.events().delete(calendarId='primary', eventId=event_id).execute()
-                
                 return {
                     'status': 'approved',
                     'order_id': event_id,
@@ -1045,24 +1140,32 @@ def move_appointment(email: str = None, phone: str = None, new_date: str = None,
         
         events = events_result.get('items', [])
         
-        # Find matching event
+        # Normalize provided identifiers
+        email_norm = normalize_email(email) if email else None
+        phone_norm = normalize_phone(phone) if phone else None
+
         for event in events:
             attendees = event.get('attendees', [])
-            description = event.get('description', '')
-            
-            email_matches = email and any(att.get('email') == email for att in attendees)
-            phone_matches = phone and phone in description
-            
-            # If both email and phone provided, both must match for identity verification
-            match_found = False
-            if email and phone:
-                match_found = email_matches and phone_matches
-            elif email:
-                match_found = email_matches
-            elif phone:
-                match_found = phone_matches
-            
-            if match_found:
+            description = event.get('description', '') or ''
+            props = event.get('extendedProperties', {}).get('private', {})
+            stored_email_norm = props.get('email_norm')
+            stored_phone_norm = props.get('phone_norm')
+            description_digits = normalize_phone(description)
+
+            email_matches = False
+            phone_matches = False
+            if email_norm:
+                if stored_email_norm and stored_email_norm == email_norm:
+                    email_matches = True
+                else:
+                    email_matches = any(normalize_email(att.get('email')) == email_norm for att in attendees)
+            if phone_norm:
+                if stored_phone_norm and stored_phone_norm == phone_norm:
+                    phone_matches = True
+                else:
+                    phone_matches = phone_norm and phone_norm in description_digits
+
+            if (email_norm or phone_norm) and (email_matches or phone_matches):
                 # Store old date for response
                 old_start = event['start'].get('dateTime', event['start'].get('date'))
                 old_date = old_start.split('T')[0] if 'T' in old_start else old_start
@@ -1163,6 +1266,13 @@ def move_appointment(email: str = None, phone: str = None, new_date: str = None,
                     body=event
                 ).execute()
                 
+                verification_parts = []
+                if email_matches:
+                    verification_parts.append('email')
+                if phone_matches:
+                    verification_parts.append('phone')
+                verification_method = 'verified via ' + ' & '.join(verification_parts) if verification_parts else 'identifier'
+
                 return {
                     'status': 'approved',
                     'order_id': event_id,
@@ -1170,7 +1280,7 @@ def move_appointment(email: str = None, phone: str = None, new_date: str = None,
                     'old_date': old_date,
                     'new_date': new_date,
                     'new_time': new_time,
-                    'message': f"Appointment '{event_summary}' successfully rescheduled from {old_date} at {old_time} to {new_date} at {new_time}"
+                    'message': f"Appointment '{event_summary}' successfully rescheduled from {old_date} at {old_time} to {new_date} at {new_time} ({verification_method})"
                 }
         
         return {

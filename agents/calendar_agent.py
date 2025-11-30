@@ -142,6 +142,16 @@ appointment_crud_agent = LlmAgent(
     - Move: "Appointment rescheduled to [date] at [time]."
     - Unavailable: "That slot is unavailable. Please choose another time."
     - Missing params: "I need [missing info]."
+    
+    PARAMETER SAFETY RULES:
+    Do NOT attempt an insert unless ALL of these are present and non-empty:
+        full_name, email, phone, date (YYYY-MM-DD), time (HH:MM)
+    If any are missing or blank respond ONLY:
+        "I still need: <comma separated missing fields>."
+    and DO NOT call insert_appointment.
+
+    POST-BOOKING CONFIRMATION FORMAT (after successful insert tool response):
+        "Confirmed ✅ {treatment} for {full_name} on {date} at {time}. Email: {email}, Phone: {phone}. Calendar link: {link}"
     """,
     tools=[
         FunctionTool(func=insert_appointment),
@@ -188,12 +198,42 @@ calendar_agent = LlmAgent(
     Use date_and_slot_finder_agent to find the slots on the date requested by the user before proceeding to Stage 3.
     If no slots available on that date, inform user and ask for an alternative date.
     
-    Stage 3 - EXECUTION:
-    Delegate complete information to AppointmentCRUD (it will check availability and book)
+        Stage 3 - EXECUTION:
+        Call tools directly:
+            1) check_availability(date, time)
+            2) If approved → insert_appointment(full_name, email, phone, date, time, treatment)
+            3) Confirm booking with explicit message and calendar link if provided
 
-    OTHER OPERATIONS (always via AppointmentCRUD):
-    - Cancel: delegate to AppointmentCRUD with email OR phone
-    - Reschedule: delegate to AppointmentCRUD with (email OR phone) + new_date + new_time
+    STRICT BOOKING GUARD:
+    If any of: name, email, phone, date, time missing → DO NOT invoke AppointmentCRUD. Respond only:
+        "I still need: <comma separated missing fields>".
+    After a successful booking ALWAYS send explicit confirmation including calendar link if provided.
+
+        INTERRUPTIBLE QUERIES (AVAILABLE ANYTIME):
+        If user asks about:
+            - available slots ("slots", "availability", "available times")
+            - list of treatments / validate treatment
+            - next available slot after a time
+        THEN immediately answer by delegating to FindAvailableSlotAgent (or calling specific tools) BEFORE resuming booking collection.
+        Never block these queries behind missing contact info.
+        After answering, if booking is still incomplete you may gently prompt for the next missing field.
+
+        DETECTION HINTS:
+            If input contains words like: "slot", "availability", "available", "treatment", "next slot" → treat as interruptible query.
+            Prefer delegation to FindAvailableSlotAgent for richer responses.
+
+        TOOL CALLING RULES (IMPORTANT):
+            - Always call function tools with explicit named parameters as defined by their signatures.
+            - Never pass a single free-text "request" argument to tools.
+            - For booking: first call check_availability(date, time); if approved, call insert_appointment(full_name, email, phone, date, time, treatment).
+
+    OTHER OPERATIONS (use direct tools):
+    - Cancel: delete_appointment(email OR phone) (identifiers normalized: email lowercased, phone digits-only)
+    - Reschedule: move_appointment(email OR phone, new_date, new_time)
+    IDENTIFIER MATCHING RULES:
+        - Email OR phone is sufficient (OR semantics). Provide both to strengthen verification.
+        - Normalization: email→lowercase trim; phone→digits-only (leading '+' preserved)
+        - Legacy events without normalized metadata fallback to attendee email / description phone digits.
     
     Query tools (use directly without delegation) depending on user request:
     - Current date: get_current_date()
@@ -204,9 +244,13 @@ calendar_agent = LlmAgent(
     tools = [
         FunctionTool(func=get_current_date),
         AgentTool(agent=corrector_agent),
-        AgentTool(agent=appointment_crud_agent),
+        AgentTool(agent=find_slot_agent),
         FunctionTool(func=check_treatment_type),
-        FunctionTool(func=return_available_slots)
+        FunctionTool(func=return_available_slots),
+        FunctionTool(func=check_availability),
+        FunctionTool(func=insert_appointment),
+        FunctionTool(func=delete_appointment),
+        FunctionTool(func=move_appointment)
     ]
 )
 
