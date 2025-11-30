@@ -40,11 +40,15 @@ general_agent = LlmAgent(
        - Validates all required fields present
        - Delegates to AppointmentCRUD for execution
        
-    2. AVAILABILITY/TREATMENT QUERIES → find_slot_agent
+        2. AVAILABILITY/TREATMENT QUERIES → find_slot_agent (ALWAYS answer even mid booking)
        - "What treatments are available?"
        - "Show me slots on [date]"
        - "When's the next available slot?"
        - Read-only queries about schedule
+
+        INTERRUPT OVERRIDE:
+            If user asks for "slots", "availability", "available times", "next slot", or treatments list while in the middle of collecting booking info → temporarily delegate to find_slot_agent, return its answer, then resume booking collection.
+            Never withhold availability info due to missing contact details.
        
     3. DATE/TIME QUESTIONS → calendar_agent
        - "What day is today?"

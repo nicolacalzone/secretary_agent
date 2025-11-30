@@ -9,3 +9,5 @@ venv/*
 config/
 config/*
 .venv
+tests/
+tests/*

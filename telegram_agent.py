@@ -414,6 +414,7 @@ class TelegramAgent:
         for event in events:
             if event.content and event.content.parts:
                 for part in event.content.parts:
+                    # 1) Plain text parts from the agent
                     if part.text:
                         # Clean the text
                         text = part.text.strip()
@@ -421,6 +422,40 @@ class TelegramAgent:
                         text = re.sub(r'\[User Info from previous messages:[^\]]*\]\s*', '', text)
                         if text:  # Only add non-empty messages
                             messages.append(text)
+                    # 2) Function responses from tools (surface useful 'message' fields)
+                    elif getattr(part, 'function_response', None):
+                        try:
+                            func_name = part.function_response.name or ""
+                            payload = part.function_response.response or {}
+                            # Common tool response pattern with 'message'
+                            if isinstance(payload, dict):
+                                # Prefer a 'message' field if present
+                                if 'message' in payload and isinstance(payload['message'], str):
+                                    msg = payload['message'].strip()
+                                    if msg:
+                                        messages.append(msg)
+                                else:
+                                    # Provide minimal summaries for known tool responses
+                                    if 'available_slots' in payload and 'date' in payload:
+                                        slots = payload.get('available_slots') or []
+                                        date = payload.get('date')
+                                        messages.append(f"Available slots on {date}: {', '.join(slots) if slots else 'none'}")
+                                    elif 'treatments' in payload and isinstance(payload['treatments'], list):
+                                        treatments = payload['treatments']
+                                        messages.append(f"We offer {len(treatments)} treatments: {', '.join(treatments)}")
+                                    elif 'status' in payload and 'requested_date' in payload and 'requested_time' in payload:
+                                        # check_availability minimal echo
+                                        status = payload.get('status')
+                                        if status == 'approved':
+                                            messages.append("The requested time slot is available.")
+                                        elif status == 'pending':
+                                            alt_d = payload.get('alternative_date')
+                                            alt_t = payload.get('alternative_time')
+                                            if alt_d and alt_t:
+                                                messages.append(f"The requested time is occupied. Alternative suggested: {alt_d} at {alt_t}.")
+                        except Exception:
+                            # Silently ignore malformed function responses
+                            pass
         
         # If no text messages but we have events with function calls
         if not messages and events:
