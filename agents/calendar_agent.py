@@ -174,7 +174,9 @@ appointment_crud_agent = LlmAgent(
 
 date_and_slot_finder_agent = SequentialAgent(
     name="DateAndSlotFinderAgent",
-    description="Agent to handle date parsing and slot finding. Return the response in clear natural language regarding date and available slots.",
+    description="Agent to handle date parsing and slot finding. First use the Corrector Agent to get the Date requested by the user in proper 'YYYY-MM-DD' format." 
+    "Call Find Avaiilable Slot Agent with the corrected date to get available slots."
+    "Return the response in clear natural language regarding date and available slots.",
     sub_agents=[corrector_agent, find_slot_agent])
 
 
@@ -189,6 +191,7 @@ calendar_agent = LlmAgent(
 2. Use conversation memory - never re-ask for information already provided
 3. Always base responses on actual tool results - never fabricate data
 4. Respond after completing each logical step or tool sequence
+5. Always use 'CorrectorAgent' before any date parsing or validation to understand the date in 'YYYY-MM-DD' format. 
 
 ---
 
@@ -232,10 +235,9 @@ Before proceeding with booking, verify ALL five required fields are present:
 Do NOT call any appointment tools until all five fields are confirmed.
 
 ### Stage 4: EXECUTION
-Call tools in this exact sequence:
-1. `check_availability(date, time)` 
-2. If available → `insert_appointment(full_name, email, phone, date, time, treatment)`
-3. Respond with explicit confirmation including:
+Use the `AppointmentCRUD` agent to insert,modify,cancel or delete the appointment as per user request.
+
+Respond with explicit confirmation including:
    - All booking details
    - Calendar link (if provided by tool)
    - Next steps or reminders
@@ -257,15 +259,9 @@ These queries can interrupt the booking workflow at any stage:
 
 ## OTHER OPERATIONS
 
-### Cancel Appointment
-- Tool: `delete_appointment(email OR phone)`
-- Only ONE identifier required (email OR phone)
-- Ask for confirmation before executing
-
-### Reschedule Appointment
-- Tool: `move_appointment(email OR phone, new_date, new_time)`
-- If new date is ambiguous, use CorrectorAgent to parse
-- Use `date_and_slot_finder_agent` to verify new time slot availability before executing
+### Cancel Appointment or Reschedule Appointment.
+First, make sure that you have the date and time of the existing appointment to be cancelled or rescheduled. Use the corrector_agent to parse and validate the date if necessary.
+Then, Use the AppointmentCRUD agent if you have the date and time of the existing appointment to be cancelled or rescheduled.
 
 ### Identifier Matching Rules
 - **Email**: Normalized to lowercase, trimmed
@@ -275,7 +271,6 @@ These queries can interrupt the booking workflow at any stage:
 
 ---
 
-## TOOL CALLING RULES
 
 ### Agent Delegation (Use These Agents):
 - **`CorrectorAgent`** - Parse ambiguous dates/times into ISO format
@@ -292,10 +287,6 @@ These queries can interrupt the booking workflow at any stage:
 ### Direct Tool Calls (Use These Tools):
 - `get_current_date()` - Returns current date
 - `check_treatment_type()` - Returns list of available treatments
-- `check_availability(date, time)` - Checks if specific slot is available (use in Stage 3)
-- `insert_appointment(full_name, email, phone, date, time, treatment)` - Creates booking
-- `delete_appointment(email OR phone)` - Cancels booking
-- `move_appointment(email OR phone, new_date, new_time)` - Reschedules booking
 
 **Always use explicit named parameters** as defined in tool signatures.
     """,
@@ -306,10 +297,10 @@ These queries can interrupt the booking workflow at any stage:
         # AgentTool(agent=find_slot_agent),
         FunctionTool(func=check_treatment_type),
         # FunctionTool(func=return_available_slots),
-        FunctionTool(func=check_availability),
-        FunctionTool(func=insert_appointment),
-        FunctionTool(func=delete_appointment),
-        FunctionTool(func=move_appointment)
+        # FunctionTool(func=check_availability),
+        # FunctionTool(func=insert_appointment),
+        # FunctionTool(func=delete_appointment),
+        # FunctionTool(func=move_appointment)
     ]
 )
 
