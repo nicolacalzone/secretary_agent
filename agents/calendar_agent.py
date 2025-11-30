@@ -58,33 +58,63 @@ corrector_agent = LlmAgent(
        - AM: 12 AM→00:00, 1-11 AM→01:00-11:00
        - PM: 12 PM→12:00, 1-11 PM→13:00-23:00
     4. Always respond with text: "Validated date: YYYY-MM-DD, time: HH:MM"
-    """,
+    """, output_key="validated_datetime",
     tools=[
         FunctionTool(func=get_current_date),
         FunctionTool(func=parse_date_expression)
     ]
 )
 
+treatment_information_agent = LlmAgent(
+    name="TreatmentInformationAgent",
+    model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
+    instruction="""Provide treatment information using the data given below.
+    
+    The treatments available are:
+        "General Consultation",
+        "Pediatric Dental Care",
+        "Wisdom Tooth Removal",
+        "Nail Polish",
+        "Nail Repair",
+        "Nail Filling",
+        "Nail Strengthening",
+        "Nail Sculpting",
+        "Nail Overlay",
+        "Nail Extension",
+        "Foot Asportation",
+        "Foot Resection",
+        "Foot Cleaning",
+        "Foot Debridement",
+        "Foot Dressing",
+        "Foot Bandaging".
+        If the user asks for treatments, list them clearly. If they ask for specific treatment details, provide concise info.
+        For any other queries, respond appropriately based on the treatments listed above.
+    """)
+    
+    
+
 # 2. Specialist Agent for Finding Available Slots and Treatment Info
 find_slot_agent = LlmAgent(
     name="FindAvailableSlotAgent",
     model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
-    instruction="""Find available appointment slots and treatment information.
+    instruction="""Find available appointment slots and treatment information on {Validated_datetime}.
     
     Workflow:
-    1. Parse any relative dates ("today", "tomorrow") using parse_date_expression()
+    1. Use the data incoming in {Validated_datetime} context if available. If necessary, use the corrector_agent to establish the current date and obtain {Validated_datetime}.
     2. Execute appropriate query:
-       - List treatments → check_treatment_type()
-       - Slots on date → return_available_slots(iso_date)
-       - Next slot after time → find_next_available_slot(iso_date, time)
+       - To List treatments use check_treatment_type()
+       - To find Slots on date use return_available_slots(iso_date)
+       - To find Next slot after time use find_next_available_slot(iso_date, time)
     3. Provide clear, formatted response
     """,
     tools=[
-        FunctionTool(func=get_current_date),
-        FunctionTool(func=parse_date_expression),
+        AgentTool(agent=corrector_agent),
+        # FunctionTool(func=get_current_date),
+        # FunctionTool(func=parse_date_expression),
         FunctionTool(func=find_next_available_slot),
         FunctionTool(func=check_treatment_type),
         FunctionTool(func=return_available_slots)
+        
     ]
 )
 
@@ -120,6 +150,13 @@ appointment_crud_agent = LlmAgent(
     ]
 )
 
+
+date_and_slot_finder_agent = SequentialAgent(
+    name="DateAndSlotFinderAgent",
+    description="Agent to handle date parsing and slot finding. Return the response in clear natural language regarding date and available slots.",
+    sub_agents=[corrector_agent, find_slot_agent])
+
+
 # 4. Main Orchestrator Agent
 calendar_agent = LlmAgent(
     name="CalendarAgent",
@@ -142,10 +179,13 @@ calendar_agent = LlmAgent(
     - Time: ask if missing (default: 09:00) or ambiguous
     - Treatment: default to "General Consultation" if not mentioned
     - Contact: name, email, phone
+    - Once you have a clear understanding of date and time, do not invoke CorrectorAgent again unless asked to change a date or time.
     
     Stage 2 - VALIDATION:
     Verify ALL required fields present: date, time, name, email, phone
     NEVER proceed to Stage 3 without all five fields.
+    Use date_and_slot_finder_agent to find the slots on the date requested by the user before proceeding to Stage 3.
+    If no slots available on that date, inform user and ask for an alternative date.
     
     Stage 3 - EXECUTION:
     Delegate complete information to AppointmentCRUD (it will check availability and book)
@@ -159,7 +199,7 @@ calendar_agent = LlmAgent(
     - Treatments list: check_treatment_type()
     - Available slots: return_available_slots(date)
     """,
-
+    sub_agents=[date_and_slot_finder_agent, appointment_crud_agent],
     tools = [
         FunctionTool(func=get_current_date),
         AgentTool(agent=corrector_agent),
