@@ -36,7 +36,8 @@ from tools.calendar_tools import (
     check_availability,
     find_next_available_slot,
     check_treatment_type,
-    return_available_slots
+    return_available_slots,
+    is_it_holiday
 )
 
 
@@ -89,11 +90,13 @@ corrector_agent = LlmAgent(
     3. Convert time to 24-hour format (default "09:00" if not provided):
        - AM: 12 AM→00:00, 1-11 AM→01:00-11:00
        - PM: 12 PM→12:00, 1-11 PM→13:00-23:00
-    4. Always respond with text: "Validated date: YYYY-MM-DD, time: HH:MM"
+    4. IMPORTANT:Check if the date is a holiday using is_it_holiday(). If it is, inform the user that bookings cannot be made on holidays and ask for an alternative date. If the user have already given other necessary booking details, store them in context for future use.
+    5. Always respond with text: "Validated date: YYYY-MM-DD, time: HH:MM"
     """, output_key="validated_datetime",
     tools=[
         FunctionTool(func=get_current_date),
-        FunctionTool(func=parse_date_expression)
+        FunctionTool(func=parse_date_expression),
+        FunctionTool(func=is_it_holiday)
     ]
 )
 
