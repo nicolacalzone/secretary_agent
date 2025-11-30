@@ -199,24 +199,51 @@ class TelegramAgent:
             
             query_content = types.Content(role="user", parts=[types.Part(text=message_to_send)])
             events = []
+            has_sent_acknowledgment = False
+            acknowledgment_message = None
             
             try:
+                # Stream events and process them as they arrive
                 async for event in self.runner.run_async(
                     user_id=user_id,
                     session_id=session_id,
                     new_message=query_content
                 ):
                     events.append(event)
+                    
+                    # If we've collected several events but no text yet, send acknowledgment
+                    if not has_sent_acknowledgment and len(events) > 2:
+                        # Check if we have function calls but no text responses yet
+                        has_function_calls = any(
+                            event.content and event.content.parts and 
+                            any(part.function_call for part in event.content.parts)
+                            for event in events
+                        )
+                        has_text = any(
+                            event.content and event.content.parts and 
+                            any(part.text and part.text.strip() for part in event.content.parts)
+                            for event in events
+                        )
+                        
+                        if has_function_calls and not has_text:
+                            # Send acknowledgment that we're processing
+                            acknowledgment_message = await update.message.reply_text(
+                                "🔄 Working on your request..."
+                            )
+                            has_sent_acknowledgment = True
+                
+                # After stream completes, log all events for debugging
+                logger.info(f"Collected {len(events)} events from agent")
+                
             except TypeError as te:
                 # Check if we got any events before the error
                 if events:
                     # Try to extract response from events we did get
-                    response_text = self._extract_text_from_events(events)
-                    if response_text and response_text != "Processing...":
-                        await update.message.reply_text(response_text)
+                    response_texts = self._extract_text_messages_from_events(events, include_fallback=False)
+                    if response_texts:
+                        for text in response_texts:
+                            await update.message.reply_text(text)
                         return
-                
-                # Log the full error for debugging
                 
                 # If no useful events, show error with more context
                 await update.message.reply_text(
@@ -225,11 +252,13 @@ class TelegramAgent:
                 )
                 return
             except Exception as e:
+                logger.error(f"Error during agent execution: {e}", exc_info=True)
                 # Check if we got any events before the error
                 if events:
-                    response_text = self._extract_text_from_events(events)
-                    if response_text and response_text != "Processing...":
-                        await update.message.reply_text(response_text)
+                    response_texts = self._extract_text_messages_from_events(events, include_fallback=False)
+                    if response_texts:
+                        for text in response_texts:
+                            await update.message.reply_text(text)
                         return
                 
                 # Show more helpful error message
@@ -247,7 +276,7 @@ class TelegramAgent:
                 self.user_sessions[user_id]['pending_approval'] = approval_info
                 
                 # Extract and send responses (may be multiple messages)
-                response_texts = self._extract_text_messages_from_events(events)
+                response_texts = self._extract_text_messages_from_events(events, include_fallback=False)
                 if response_texts:
                     for text in response_texts:
                         await update.message.reply_text(text)
@@ -259,14 +288,39 @@ class TelegramAgent:
                         "⏸️ Please reply 'yes' to approve or 'no' to decline."
                     )
             else:
-                # No approval needed - normal response
-                logger.info(f"Agent response events: {events}")
-                response_texts = self._extract_text_messages_from_events(events)
+                # No approval needed - extract final response
+                logger.info(f"Processing {len(events)} events for final response")
+                response_texts = self._extract_text_messages_from_events(events, include_fallback=False)
+                
                 if response_texts:
+                    # Delete acknowledgment message if we sent one
+                    if has_sent_acknowledgment and acknowledgment_message:
+                        try:
+                            await acknowledgment_message.delete()
+                        except Exception:
+                            pass  # Ignore if deletion fails
+                    
+                    # Send actual responses
                     for text in response_texts:
                         await update.message.reply_text(text)
                 else:
-                    await update.message.reply_text("I'm processing your request...")
+                    # No text found - this indicates an issue
+                    logger.warning(f"No text response found in {len(events)} events. Event details: {events}")
+                    
+                    # If we sent acknowledgment, update it with error
+                    if has_sent_acknowledgment and acknowledgment_message:
+                        try:
+                            await acknowledgment_message.edit_text(
+                                "⚠️ I processed your request but couldn't generate a response. Please try rephrasing."
+                            )
+                        except Exception:
+                            await update.message.reply_text(
+                                "⚠️ I processed your request but couldn't generate a response. Please try rephrasing."
+                            )
+                    else:
+                        await update.message.reply_text(
+                            "⚠️ I processed your request but couldn't generate a response. Please try rephrasing."
+                        )
             
         except Exception as e:
             await update.message.reply_text(
@@ -403,8 +457,13 @@ class TelegramAgent:
         # Fallback: just current year
         return now.year
     
-    def _extract_text_messages_from_events(self, events):
+    def _extract_text_messages_from_events(self, events, include_fallback=True):
         """Extract text responses from events as separate messages.
+        
+        Args:
+            events: List of events from the agent
+            include_fallback: If True, return fallback messages when no text found.
+                            If False, return empty list when no text found.
         
         Returns a list of text messages, one for each text part found.
         This allows the bot to send multiple messages if the agent generates multiple responses.
@@ -414,6 +473,7 @@ class TelegramAgent:
         for event in events:
             if event.content and event.content.parts:
                 for part in event.content.parts:
+                    # Extract from text parts
                     if part.text:
                         # Clean the text
                         text = part.text.strip()
@@ -421,9 +481,38 @@ class TelegramAgent:
                         text = re.sub(r'\[User Info from previous messages:[^\]]*\]\s*', '', text)
                         if text:  # Only add non-empty messages
                             messages.append(text)
+                    
+                    # Extract from function_response parts (agent tool responses)
+                    elif part.function_response:
+                        response_data = part.function_response.response
+                        if response_data:
+                            # Try common response field names
+                            text = None
+                            if isinstance(response_data, dict):
+                                # Try 'result', 'response', 'message', 'text' keys
+                                text = (response_data.get('result') or 
+                                       response_data.get('response') or 
+                                       response_data.get('message') or 
+                                       response_data.get('text'))
+                            elif isinstance(response_data, str):
+                                text = response_data
+                            
+                            if text:
+                                text = str(text).strip()
+                                if text:
+                                    logger.info(f"Extracted text from function_response: {text[:100]}")
+                                    messages.append(text)
         
-        # If no text messages but we have events with function calls
-        if not messages and events:
+        # Return messages if found
+        if messages:
+            return messages
+        
+        # If no fallback requested, return empty list
+        if not include_fallback:
+            return []
+        
+        # If no text messages but we have events with function calls, provide fallback
+        if events:
             for event in events:
                 if event.content and event.content.parts:
                     for part in event.content.parts:
@@ -431,7 +520,7 @@ class TelegramAgent:
                             # We had function calls but no text response
                             return ["I'm working on your request..."]
         
-        return messages if messages else ["Processing..."]
+        return ["Processing..."]
     
     def _extract_text_from_events(self, events):
         """Extract text responses from events (legacy method - combines all text into one).
