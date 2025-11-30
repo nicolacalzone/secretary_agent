@@ -24,6 +24,7 @@ from . import (
     AgentTool,
     retry_config,
     FunctionTool,
+    SequentialAgent
 )
 
 from tools.calendar_tools import (
@@ -42,7 +43,13 @@ from tools.calendar_tools import (
 corrector_agent = LlmAgent(
     name="CorrectorAgent",
     model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
-    instruction="""Parse date expressions into ISO format (YYYY-MM-DD) and normalize time to 24-hour format.
+    instruction="""
+    You are an agent that identifies and corrects date and time inputs.
+    If the user provides relative dates ("today", "tomorrow", "next Monday"), call get_current_date() and then parse_date_expression() to resolve them.
+    
+    If the user provides only the date like 24th, then assume it as the next occurrence of that date in the future. call get_current_date() to understand the current date context.
+    
+    Parse date expressions into ISO format (YYYY-MM-DD) using parse_date_expression() function and normalize time to 24-hour format.
 
     Process:
     1. Call get_current_date() to establish reference date
@@ -119,6 +126,9 @@ calendar_agent = LlmAgent(
     model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
     instruction="""Coordinate calendar bookings using conversation memory. Always respond after tool calls.
 
+    
+    Always respond about the date and time in ISO format (YYYY-MM-DD for date, HH:MM 24-hour for time). Use corrector_agent to parse/validate any date/time inputs.
+    When you respond, ALWAYS use information from delegated agents or tool calls. NEVER invent, assume, or fabricate results.
     CONVERSATION MEMORY:
     Review conversation history before asking questions. Build on existing information - never re-ask what user already provided.
 
@@ -126,8 +136,10 @@ calendar_agent = LlmAgent(
     
     Stage 1 - COLLECTION:
     Gather all required information:
-    - Date: delegate to CorrectorAgent for parsing (handles "today", "tomorrow", etc.)
-    - Time: ask if missing (default: 09:00)
+    - Date: if ambiguous, delegate to CorrectorAgent for parsing (handles "today", "tomorrow", "24th", "24th Dec", "24th next month", etc.).
+      Identify the date as the next occurance of the date requested by the user after running get_current_date.
+      Then confirm ISO format of the date you understood with the user.
+    - Time: ask if missing (default: 09:00) or ambiguous
     - Treatment: default to "General Consultation" if not mentioned
     - Contact: name, email, phone
     
@@ -142,7 +154,7 @@ calendar_agent = LlmAgent(
     - Cancel: delegate to AppointmentCRUD with email OR phone
     - Reschedule: delegate to AppointmentCRUD with (email OR phone) + new_date + new_time
     
-    Query tools (use directly without delegation):
+    Query tools (use directly without delegation) depending on user request:
     - Current date: get_current_date()
     - Treatments list: check_treatment_type()
     - Available slots: return_available_slots(date)
@@ -156,5 +168,4 @@ calendar_agent = LlmAgent(
         FunctionTool(func=return_available_slots)
     ]
 )
-
 
