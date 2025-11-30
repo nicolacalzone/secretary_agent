@@ -15,6 +15,7 @@ from . import (
     ResumabilityConfig,
     LoggingPlugin,
     InMemoryMemoryService,
+    ContextCacheConfig
 )
 
 # Import LoggingPlugin for observability (like Kaggle notebook)
@@ -23,7 +24,7 @@ from google.adk.plugins import LoggingPlugin
 # Import the calendar_agent from the agents package
 from agents.calendar_agent import calendar_agent, find_slot_agent
 
-general_agent = LlmAgent(
+root_agent = LlmAgent(
     name="booking_assistant",
     model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
     instruction="""You are a Booking assistant coordinator. Route requests to specialized agents if necessary and relay their responses.
@@ -62,9 +63,14 @@ general_agent = LlmAgent(
 # NEW: Wrap in resumable App with LoggingPlugin for observability
 general_app = App(
     name="agents",
-    root_agent=general_agent,
+    root_agent=root_agent,
     resumability_config=ResumabilityConfig(is_resumable=True),
-    plugins=[LoggingPlugin()]  # Add logging plugin here for comprehensive observability
+    plugins=[LoggingPlugin()],  # Add logging plugin here for comprehensive observability
+    context_cache_config=ContextCacheConfig(
+        min_tokens=2048,    # Minimum tokens to trigger caching
+        ttl_seconds=600,    # Store for up to 10 minutes
+        cache_intervals=5,  # Refresh after 5 uses
+    ),
 )
 
 # Create session service and runner
