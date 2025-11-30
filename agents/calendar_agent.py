@@ -39,32 +39,6 @@ from tools.calendar_tools import (
     return_available_slots
 )
 
-# 1. Specialist Agent for Date/Time Parsing and Validation
-corrector_agent = LlmAgent(
-    name="CorrectorAgent",
-    model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
-    instruction="""
-    You are an agent that identifies and corrects date and time inputs.
-    If the user provides relative dates ("today", "tomorrow", "next Monday"), call get_current_date() and then parse_date_expression() to resolve them.
-    
-    If the user provides only the date like 24th, then assume it as the next occurrence of that date in the future. call get_current_date() to understand the current date context. use current date to determine the correct month and year the user is referring to. 
-    Remember to always return the date you determined in ISO format (YYYY-MM-DD).
-    
-    Parse date expressions into ISO format (YYYY-MM-DD) using parse_date_expression() function and normalize time to 24-hour format.
-
-    Process:
-    1. Call get_current_date() to establish reference date
-    2. Call parse_date_expression() with user's date input
-    3. Convert time to 24-hour format (default "09:00" if not provided):
-       - AM: 12 AM→00:00, 1-11 AM→01:00-11:00
-       - PM: 12 PM→12:00, 1-11 PM→13:00-23:00
-    4. Always respond with text: "Validated date: YYYY-MM-DD, time: HH:MM"
-    """, output_key="validated_datetime",
-    tools=[
-        FunctionTool(func=get_current_date),
-        FunctionTool(func=parse_date_expression)
-    ]
-)
 
 treatment_information_agent = LlmAgent(
     name="TreatmentInformationAgent",
@@ -91,6 +65,39 @@ treatment_information_agent = LlmAgent(
         If the user asks for treatments, list them clearly. If they ask for specific treatment details, provide concise info.
         For any other queries, respond appropriately based on the treatments listed above.
     """)
+
+# 1. Specialist Agent for Date/Time Parsing and Validation
+corrector_agent = LlmAgent(
+    name="CorrectorAgent",
+    model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
+    instruction="""
+    You are an agent that identifies and corrects date and time inputs.
+    If the user provides relative dates ("today", "tomorrow", "next Monday"), call get_current_date(), use the output to understand which date user wants in his query in "YYYY-MM-DD" format. Then send the date you identified to parse_date_expression().
+    
+    If the user provides only the date like "24th", then assume it as the next occurrence of that date in the future. call get_current_date() to understand the current date context. use current date to determine the correct month and year the user is referring to. 
+    Remember to always return the date you determined in ISO format (YYYY-MM-DD).
+    
+    Parse date expressions into ISO format (YYYY-MM-DD). Then use parse_date_expression() function and normalize time to 24-hour format.
+
+    Process:
+    1. Call get_current_date() to establish reference date.
+    2. Correct the users date input to ISO format with relevant year/month/day. 
+        Remember that "24th" means the next occurrence of the 24th in the future.
+        If the date has already passed this month, move to next month.
+        Important: Use the output of get_current_date(), understand the date user refers to in his query and change it into YYYY-MM-DD format before giving it to parse_date_expression().
+    2. Call parse_date_expression() with corrected user's date input.
+    3. Convert time to 24-hour format (default "09:00" if not provided):
+       - AM: 12 AM→00:00, 1-11 AM→01:00-11:00
+       - PM: 12 PM→12:00, 1-11 PM→13:00-23:00
+    4. Always respond with text: "Validated date: YYYY-MM-DD, time: HH:MM"
+    """, output_key="validated_datetime",
+    tools=[
+        FunctionTool(func=get_current_date),
+        FunctionTool(func=parse_date_expression)
+    ]
+)
+
+
     
     
 
