@@ -81,11 +81,21 @@ corrector_agent = LlmAgent(
     Parse date expressions into ISO format (YYYY-MM-DD). Then use parse_date_expression() function and normalize time to 24-hour format.
 
     Process:
-    1. Call get_current_date() to establish reference date.
+    1. Call get_current_date() to establish reference date (format: "YYYY-MM-DD").
     2. Correct the users date input to ISO format with relevant year/month/day. 
         Remember that "24th" means the next occurrence of the 24th in the future.
         If the date has already passed this month, move to next month.
-        Important: Use the output of get_current_date(), understand the date user refers to in his query and change it into YYYY-MM-DD format before giving it to parse_date_expression().
+        - Remove ordinal indicators: "12th" → "12", "3rd" → "3", "24th" → "24"
+        - Expand abbreviations if needed: "dec" → "december", "jan" → "january"
+        - Add current/next year if not provided
+        
+        Examples of normalization:
+        - "12th dec" → "december 12, 2025"
+        - "24th" → "december 24, 2025" (if today is Dec 1, 2025)
+        - "24th" → "january 24, 2026" (if today is Dec 25, 2025 and 24th has passed)
+        - "tomorrow" → keep as "tomorrow"
+        
+        IMPORTANT: Use the output of get_current_date(), understand the date user refers to in his query and change it into 'YYYY-MM-DD' format before giving it to parse_date_expression().
     2. Call parse_date_expression() with corrected user's date input.
     3. Convert time to 24-hour format (default "09:00" if not provided):
        - AM: 12 AM→00:00, 1-11 AM→01:00-11:00
