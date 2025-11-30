@@ -61,7 +61,7 @@ root_agent = LlmAgent(
 )
 
 # NEW: Wrap in resumable App with LoggingPlugin for observability
-general_app = App(
+app = App(
     name="agents",
     root_agent=root_agent,
     resumability_config=ResumabilityConfig(is_resumable=True),
@@ -75,8 +75,8 @@ general_app = App(
 
 # Create session service and runner
 session_service = InMemorySessionService()
-general_runner = Runner(
-    app=general_app,  # Pass app instead of agent
+runner = Runner(
+    app=app,  # Pass app instead of agent
     session_service=session_service,
     memory_service=InMemoryMemoryService() 
 )
