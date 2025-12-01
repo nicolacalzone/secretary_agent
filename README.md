@@ -49,6 +49,9 @@ All tools use google-api-python-client for direct Google Calendar API access
 └── README.md
 ```
 
+![Architecture](./Diagramma.png)
+
+
 ## Session Management with ADK
 
 The system uses ADK's built-in resumability for multi-turn conversations:
