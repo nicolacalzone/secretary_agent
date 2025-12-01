@@ -185,50 +185,53 @@ corrector_agent = LlmAgent(
 
 
 def before_slot_finder_callback(callback_context: CallbackContext) -> Optional[types.Content]:
-    """
-    Callback to set validated date context OR prevent execution if date is invalid.
-    """
-    # Attempt to retrieve the data set by the CorrectorAgent
-    validated_datetime = callback_context.shared_context.get("validated_datetime")
+    """Callback to set validated date context before FindAvailableSlotAgent runs"""
     
-    # CASE 1: Valid Date found
-    if validated_datetime:
-        return types.Content(
-            text=f"Use the date {validated_datetime['date']} for finding available slots."
+    # 1. Retrieve the text output from the previous agent (CorrectorAgent)
+    # Note: Use .state to access the shared dictionary
+    validated_output = callback_context.state.get("validated_datetime")
+
+    # 2. Define the message based on whether a valid date was found
+    if validated_output and "Validated date:" in str(validated_output):
+        message_text = f"Use the verified date information from the previous agent: {validated_output}"
+    else:
+        # Stop the agent from hallucinating if no valid date was found (e.g. holiday)
+        message_text = (
+            "SYSTEM NOTICE: The previous agent did not provide a valid date "
+            "(likely due to a holiday or missing info). "
+            "DO NOT call any tools. "
+            "Simply output a short confirmation of the previous agent's message."
         )
-    
-    # CASE 2: No valid date (Holiday, invalid input, or outside working hours)
-    # We inject a strict instruction to the FindAvailableSlotAgent to stop it from 
-    # hallucinating or trying to run tools on empty data.
+
+    # 3. Return the correctly formatted Content object
     return types.Content(
-        text=(
-            "SYSTEM NOTICE: The previous agent determined the date is invalid or a holiday. "
-            "DO NOT call any tools (like return_available_slots). "
-            "DO NOT attempt to find slots. "
-            "Simply reiterate to the user that appointments cannot be booked on this date."
-        )
+        parts=[
+            types.Part(text=message_text)
+        ]
     )
     
-
+    
 # 2. Specialist Agent for Finding Available Slots and Treatment Info
 find_slot_agent = LlmAgent(
     name="FindAvailableSlotAgent",
     model=Gemini(model=model_name, retry_options=retry_config),
-    instruction="""Find available appointment slots and treatment information on {validated_datetime}.
+    instruction="""Find available appointment slots and treatment information based on previous agents response if it is valid.Otherwise terminate with acknowledgement.
     
     CRITICAL CHECK:
-    If you receive a SYSTEM NOTICE that the date is invalid or a holiday:
-    1. Do NOT call any tools.
-    2. Respond politely confirming the date is unavailable/holiday based on previous context.
-    3. Terminate.
+    If you receive a "SYSTEM NOTICE" or a message that the date is invalid or a holiday:
+    1. DO NOT call return_available_slots() or any other tool.
+    2. DO NOT hallucinate slots.
+    3. Simply acknowledge the previous agent's refusal.
+    4. Respond politely confirming the date is unavailable/holiday based on previous context.
+    5. Terminate.
     
     Workflow:
-    1. Use the data incoming in {validated_datetime} context if available. If necessary, use the corrector_agent to establish the current date and obtain {Validated_datetime}.
+    1. Use the data incoming in {validated_datetime} context if available. If necessary, use the CorrectorAgent to establish the current date and obtain {validated_datetime}.
     2. Execute appropriate query:
        - To List treatments use check_treatment_type()
        - To find Slots on date use return_available_slots(iso_date)
        - To find Next slot after time use find_next_available_slot(iso_date, time)
-    3. Provide clear, formatted response
+    3. Provide clear, formatted response from the tool results to the user.
     """,
     tools=[
         AgentTool(agent=corrector_agent),
