@@ -119,13 +119,15 @@ corrector_agent = LlmAgent(
         4. HOLIDAY CHECK
         Call is_it_holiday() with the ISO date.
         - If holiday: 
-            * Inform user that bookings cannot be made on holidays
-            * Ask for an alternative date
-            * Remember other booking details provided (name, email, phone, treatment)
-        - If not holiday: proceed to step 5
+            * Inform user that bookings cannot be made on holidays.
+            * Ask for an alternative date.
+            * STOP PROCESS HERE. Do NOT set the "validated_datetime" output variable.
+        - If not holiday: 
+            * Proceed to step 5 (Set output).
 
-        5. RESPOND
+        5. RESPOND (ONLY IF NOT HOLIDAY)
         Always respond with: "Validated date: YYYY-MM-DD, time: HH:MM"
+        And ensure the output_key "validated_datetime" is populated.
 
         EXAMPLES:
 
@@ -183,13 +185,29 @@ corrector_agent = LlmAgent(
 
 
 def before_slot_finder_callback(callback_context: CallbackContext) -> Optional[types.Content]:
-    """Callback to set validated date context before FindAvailableSlotAgent runs"""
+    """
+    Callback to set validated date context OR prevent execution if date is invalid.
+    """
+    # Attempt to retrieve the data set by the CorrectorAgent
     validated_datetime = callback_context.shared_context.get("validated_datetime")
+    
+    # CASE 1: Valid Date found
     if validated_datetime:
         return types.Content(
             text=f"Use the date {validated_datetime['date']} for finding available slots."
         )
-    return None
+    
+    # CASE 2: No valid date (Holiday, invalid input, or outside working hours)
+    # We inject a strict instruction to the FindAvailableSlotAgent to stop it from 
+    # hallucinating or trying to run tools on empty data.
+    return types.Content(
+        text=(
+            "SYSTEM NOTICE: The previous agent determined the date is invalid or a holiday. "
+            "DO NOT call any tools (like return_available_slots). "
+            "DO NOT attempt to find slots. "
+            "Simply reiterate to the user that appointments cannot be booked on this date."
+        )
+    )
     
 
 # 2. Specialist Agent for Finding Available Slots and Treatment Info
@@ -197,6 +215,12 @@ find_slot_agent = LlmAgent(
     name="FindAvailableSlotAgent",
     model=Gemini(model=model_name, retry_options=retry_config),
     instruction="""Find available appointment slots and treatment information on {validated_datetime}.
+    
+    CRITICAL CHECK:
+    If you receive a SYSTEM NOTICE that the date is invalid or a holiday:
+    1. Do NOT call any tools.
+    2. Respond politely confirming the date is unavailable/holiday based on previous context.
+    3. Terminate.
     
     Workflow:
     1. Use the data incoming in {validated_datetime} context if available. If necessary, use the corrector_agent to establish the current date and obtain {Validated_datetime}.
