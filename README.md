@@ -29,6 +29,10 @@ general_agent (LlmAgent)                     ← router
 All tools use google-api-python-client for direct Google Calendar API access
 ```
 
+
+![Architecture](./imgs/Diagramma.png)
+
+
 ## Project Structure
 
 ```
@@ -48,9 +52,6 @@ All tools use google-api-python-client for direct Google Calendar API access
 ├── requirements.txt
 └── README.md
 ```
-
-![Architecture](./imgs/Diagramma.png)
-
 
 ## USE CASES
 
