@@ -199,8 +199,8 @@ class TelegramAgent:
             
             query_content = types.Content(role="user", parts=[types.Part(text=message_to_send)])
             events = []
-            has_sent_acknowledgment = False
-            acknowledgment_message = None
+            # Send initial thinking message
+            thinking_message = await update.message.reply_text("🤔 Thinking...")
             
             try:
                 # Stream events and process them as they arrive
@@ -210,27 +210,6 @@ class TelegramAgent:
                     new_message=query_content
                 ):
                     events.append(event)
-                    
-                    # If we've collected several events but no text yet, send acknowledgment
-                    if not has_sent_acknowledgment and len(events) > 2:
-                        # Check if we have function calls but no text responses yet
-                        has_function_calls = any(
-                            event.content and event.content.parts and 
-                            any(part.function_call for part in event.content.parts)
-                            for event in events
-                        )
-                        has_text = any(
-                            event.content and event.content.parts and 
-                            any(part.text and part.text.strip() for part in event.content.parts)
-                            for event in events
-                        )
-                        
-                        if has_function_calls and not has_text:
-                            # Send acknowledgment that we're processing
-                            acknowledgment_message = await update.message.reply_text(
-                                "🔄 Working on your request..."
-                            )
-                            has_sent_acknowledgment = True
                 
                 # After stream completes, log all events for debugging
                 logger.info(f"Collected {len(events)} events from agent")
@@ -241,12 +220,12 @@ class TelegramAgent:
                     # Try to extract response from events we did get
                     response_texts = self._extract_text_messages_from_events(events, include_fallback=False)
                     if response_texts:
-                        for text in response_texts:
-                            await update.message.reply_text(text)
+                        final_text = response_texts[-1]
+                        await thinking_message.edit_text(final_text)
                         return
                 
                 # If no useful events, show error with more context
-                await update.message.reply_text(
+                await thinking_message.edit_text(
                     f"😓 I encountered a technical issue. Please try rephrasing your request.\n\n"
                     f"Debug: {str(te)[:200]}"
                 )
@@ -257,12 +236,12 @@ class TelegramAgent:
                 if events:
                     response_texts = self._extract_text_messages_from_events(events, include_fallback=False)
                     if response_texts:
-                        for text in response_texts:
-                            await update.message.reply_text(text)
+                        final_text = response_texts[-1]
+                        await thinking_message.edit_text(final_text)
                         return
                 
                 # Show more helpful error message
-                await update.message.reply_text(
+                await thinking_message.edit_text(
                     f"😓 Sorry, I encountered an error: {str(e)[:200]}\n\n"
                     "Please try again or contact support."
                 )
@@ -275,15 +254,16 @@ class TelegramAgent:
                 # Store approval info for this user
                 self.user_sessions[user_id]['pending_approval'] = approval_info
                 
-                # Extract and send responses (may be multiple messages)
+                # Extract and send responses
                 response_texts = self._extract_text_messages_from_events(events, include_fallback=False)
                 if response_texts:
-                    for text in response_texts:
-                        await update.message.reply_text(text)
-                    # Add approval prompt after last message
+                    # Use the last message as the main response
+                    final_text = response_texts[-1]
+                    await thinking_message.edit_text(final_text)
+                    # Add approval prompt as a new message
                     await update.message.reply_text("⏸️ Please reply 'yes' or 'no'.")
                 else:
-                    await update.message.reply_text(
+                    await thinking_message.edit_text(
                         "The requested time slot is occupied. An alternative has been suggested.\n\n"
                         "⏸️ Please reply 'yes' to approve or 'no' to decline."
                     )
@@ -293,34 +273,18 @@ class TelegramAgent:
                 response_texts = self._extract_text_messages_from_events(events, include_fallback=False)
                 
                 if response_texts:
-                    # Delete acknowledgment message if we sent one
-                    if has_sent_acknowledgment and acknowledgment_message:
-                        try:
-                            await acknowledgment_message.delete()
-                        except Exception:
-                            pass  # Ignore if deletion fails
+                    # Get the LAST message
+                    final_text = response_texts[-1]
                     
-                    # Send actual responses
-                    for text in response_texts:
-                        await update.message.reply_text(text)
+                    # Edit the thinking message with the final response
+                    await thinking_message.edit_text(final_text)
                 else:
                     # No text found - this indicates an issue
                     logger.warning(f"No text response found in {len(events)} events. Event details: {events}")
                     
-                    # If we sent acknowledgment, update it with error
-                    if has_sent_acknowledgment and acknowledgment_message:
-                        try:
-                            await acknowledgment_message.edit_text(
-                                "⚠️ I processed your request but couldn't generate a response. Please try rephrasing."
-                            )
-                        except Exception:
-                            await update.message.reply_text(
-                                "⚠️ I processed your request but couldn't generate a response. Please try rephrasing."
-                            )
-                    else:
-                        await update.message.reply_text(
-                            "⚠️ I processed your request but couldn't generate a response. Please try rephrasing."
-                        )
+                    await thinking_message.edit_text(
+                        "⚠️ I processed your request but couldn't generate a response. Please try rephrasing."
+                    )
             
         except Exception as e:
             await update.message.reply_text(
