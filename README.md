@@ -19,31 +19,13 @@ A robust, multi-turn appointment booking system powered by Google Agent Developm
 Telegram User
   ↓
 TELEGRAM_AGENT (message interface)
-  • Receives messages from Telegram
-  • Manages user sessions & approval flows
-  • Handles long-running operations (LRO) with user confirmation
-  • Sends formatted responses back
   ↓
-GENERAL_AGENT (entry point, booking assistant)
-  • Collects user info (name, email, phone, date, time, treatment)
-  • Delegates all calendar operations to CALENDAR_AGENT
-  ↓
-CALENDAR_AGENT (orchestrator)
-  ├──▶ CORRECTOR_AGENT
-  │     • Parses natural language dates ("tomorrow", "next Tuesday", "28 11 2025")
-  │     • Converts times to 24-hour format
-  │     • Returns: "Validated date: YYYY-MM-DD, time: HH:MM"
-  │
-  ├──▶ APPOINTMENT_CRUD_AGENT
-  │     • Validates required parameters before tool calls
-  │     • Executes: insert_appointment, delete_appointment, move_appointment
-  │     • Returns structured status responses
-  │
-  └──▶ Direct Tools
-        • check_availability(date, time) - checks conflicts & proposes alternatives
-        • find_next_available_slot(date, time) - searches forward for free slots
-        • parse_date_expression(expression) - handles date parsing
-        • get_current_date() - provides context for relative dates
+general_agent (LlmAgent)                     ← router
+├── treatments_info_agent (LlmAgent)
+└── calendar_agent (LlmAgent)                 ← smart orchestrator
+     ├── parse_then_find_agent (SequentialAgent)   ← safe sequential chain
+     ├── booking_executor_agent (LlmAgent)         ← dumb final executor
+     └── date_parser_agent (only used standalone when canceling, etc.)
         
 All tools use google-api-python-client for direct Google Calendar API access
 ```

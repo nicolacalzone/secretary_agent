@@ -65,15 +65,14 @@ find_slot_agent = LlmAgent(
     name="FindAvailableSlotAgent",
     model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
      instruction="""Find available appointment slots.
-
-     It takes in input {validated_date_time} date and time to query available slots.
     
     Workflow:
-        1. Use the date and time stored in {validated_date_time}.
-        2. Execute appropriate query:
-        - Slots on date → return_available_slots(iso_date)
-        - Next slot after time → find_next_available_slot(iso_date, time)
-        3. Provide clear, formatted response containing the available slots and store in {availability_info}.
+        1. If the user provides a relative date (e.g., "tomorrow", "next Monday"), use CorrectorAgent to parse it into ISO format.
+        2. Execute appropriate query based on the request:
+           - All slots on a specific date → return_available_slots(iso_date)
+           - Next available slot after a specific time → find_next_available_slot(iso_date, time)
+           - Check if a specific slot is available → check_availability(iso_date, time)
+        3. Provide a clear, formatted response containing the available slots.
     """,
     tools=[
         AgentTool(agent=corrector_agent),
@@ -143,9 +142,9 @@ appointment_crud_agent = LlmAgent(
     5. For pending/rejected status, offer alternatives but DO NOT book without user confirmation
     
     POST-OPERATION, WRITE A FINAL MESSAGE:
-    - Insert: "Appointment booked for [full_name] on [date] at [time]. Calendar link: [link]"
+    - Insert: "Appointment booked for [full_name] on [date] at [time]. Calendar link: [public_add_link]"
     - Delete: "Appointment cancelled."
-    - Move: "Appointment rescheduled for [full_name] to [date] at [time]. Calendar link: [link]"
+    - Move: "Appointment rescheduled for [full_name] to [date] at [time]. Calendar link: [public_add_link]"
     - Pending/Alternative: "The requested time is occupied. [Alternative time offer]"
     - Unavailable: "That slot is unavailable. Please choose another time."
     - Missing params: "I need [missing info]."

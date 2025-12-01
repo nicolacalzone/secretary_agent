@@ -968,16 +968,13 @@ def insert_appointment(full_name: str, email: str, phone: str, date: str, time: 
             end_dt=end_time,
         )
 
-        # Prefer the shareable add-to-calendar link in the message to avoid private links confusion
+        # Use only the public shareable add-to-calendar link
         lines = [
             f"Confirmed ✅ {treatment} for {full_name} on {date} at {time}.",
             f"Email: {email}, Phone: {phone}.",
         ]
         if public_add_link:
-            lines.append(f"Public add-to-calendar link: {public_add_link}")
-        # Owner/private htmlLink (may require calendar access)
-        if event.get('htmlLink'):
-            lines.append(f"Owner calendar link (may be private): {event.get('htmlLink')}")
+            lines.append(f"Add to calendar: {public_add_link}")
         confirmation_msg = " ".join(lines)
         return {
             'status': 'approved',
@@ -1325,6 +1322,12 @@ def move_appointment(email: str = None, phone: str = None, new_date: str = None,
                     end_dt=end_dt,
                 )
 
+                msg_parts = [
+                    f"Appointment '{event_summary}' successfully rescheduled from {old_date} at {old_time} to {new_date} at {new_time} ({verification_method})."
+                ]
+                if public_add_link:
+                    msg_parts.append(f"Add to calendar: {public_add_link}")
+
                 return {
                     'status': 'approved',
                     'order_id': event_id,
@@ -1332,9 +1335,8 @@ def move_appointment(email: str = None, phone: str = None, new_date: str = None,
                     'old_date': old_date,
                     'new_date': new_date,
                     'new_time': new_time,
-                    'link': updated_event.get('htmlLink'),
                     'public_add_link': public_add_link,
-                    'message': f"Appointment '{event_summary}' successfully rescheduled from {old_date} at {old_time} to {new_date} at {new_time} ({verification_method})"
+                    'message': " ".join(msg_parts)
                 }
         
         return {
