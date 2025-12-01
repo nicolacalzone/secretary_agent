@@ -16,6 +16,13 @@ Workflow:
     Date parsing → Always via CorrectorAgent
     CRUD operations → Always via AppointmentCRUD (includes availability checks)
 """
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+model_name = os.getenv("GOOGLE_LLM_MODEL", "gemini-2.5-flash-lite")
+
 
 
 from . import (
@@ -43,7 +50,7 @@ from tools.calendar_tools import (
 
 treatment_information_agent = LlmAgent(
     name="TreatmentInformationAgent",
-    model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
+    model=Gemini(model=model_name, retry_options=retry_config),
     instruction="""Provide treatment information using the tool check_treatment_type(). If the user inquires about available treatments, use the tool without any arguments to get the list.
 
         If the user asks for treatments, list them clearly. If they ask for specific treatment details, provide concise info.
@@ -55,7 +62,7 @@ treatment_information_agent = LlmAgent(
 # 1. Specialist Agent for Date/Time Parsing and Validation
 corrector_agent = LlmAgent(
     name="CorrectorAgent",
-    model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
+    model=Gemini(model=model_name, retry_options=retry_config),
     instruction="""
         You are an agent that identifies and corrects date and time inputs into ISO format.
 
@@ -162,12 +169,13 @@ corrector_agent = LlmAgent(
         - ALWAYS normalize dates before calling parse_date_expression() (except for relative dates like "tomorrow")
         - ALWAYS check for holidays before final validation
         - ALWAYS respond with the exact format: "Validated date: YYYY-MM-DD, time: HH:MM"
-        """, output_key="validated_datetime",
+        """,
     tools=[
         FunctionTool(func=get_current_date),
         FunctionTool(func=parse_date_expression),
         FunctionTool(func=is_it_holiday)
-    ]
+    ],
+    output_key="validated_datetime",
 )
 
 
@@ -177,7 +185,7 @@ corrector_agent = LlmAgent(
 # 2. Specialist Agent for Finding Available Slots and Treatment Info
 find_slot_agent = LlmAgent(
     name="FindAvailableSlotAgent",
-    model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
+    model=Gemini(model=model_name, retry_options=retry_config),
     instruction="""Find available appointment slots and treatment information on {validated_datetime}.
     
     Workflow:
@@ -202,7 +210,7 @@ find_slot_agent = LlmAgent(
 # 3. Specialist Agent for Appointment Operations
 appointment_crud_agent = LlmAgent(
     name="AppointmentCRUD",
-    model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
+    model=Gemini(model=model_name, retry_options=retry_config),
     instruction="""Execute appointment operations with availability validation.
     
     CRITICAL WORKFLOW:
@@ -253,7 +261,7 @@ date_and_slot_finder_agent = SequentialAgent(
 # 4. Main Orchestrator Agent
 calendar_agent = LlmAgent(
     name="CalendarAgent",
-    model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
+    model=Gemini(model=model_name, retry_options=retry_config),
     instruction="""# Calendar Booking Agent - System Prompt
 
 ## Core Principles

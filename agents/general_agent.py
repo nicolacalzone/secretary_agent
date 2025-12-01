@@ -26,10 +26,16 @@ from google.adk.plugins import LoggingPlugin
 # Import the calendar_agent from the agents package
 from agents.calendar_agent import calendar_agent, find_slot_agent, treatment_information_agent
 
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+model_name = os.getenv("GOOGLE_LLM_MODEL", "gemini-2.5-flash-lite")
 
 general_agent = LlmAgent(
     name="booking_assistant",
-    model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
+    model=Gemini(model=model_name, retry_options=retry_config),
     instruction="""You are a Booking assistant coordinator. Route requests to specialized agents if necessary and relay their responses.
     When the user denotes a date, always pass it to the calendar_agent to validate and standardize it.
 
