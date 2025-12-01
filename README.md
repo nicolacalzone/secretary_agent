@@ -1,5 +1,4 @@
-# Appointment Booking Multi-Agent System  
-**Google ADK • Google Calendar API • Production-Ready**
+# BookSmart - Appointment Booking Multi-Agent System  
 
 A robust, multi-turn appointment booking system powered by Google Agent Development Kit (ADK). Supports medical clinics, salons, law firms — any service that needs to book, reschedule or cancel time slots with real-time availability.
 
@@ -10,7 +9,7 @@ A robust, multi-turn appointment booking system powered by Google Agent Developm
 - Timezone-aware scheduling (Europe/Rome)
 - Business hours validation (9 AM - 5 PM, Mon-Fri, excluding holidays)
 - Session persistence with ADK resumability
-- **Implicit context caching** - automatic cost reduction in Gemini 2.5
+- Implicit context caching - automatic cost reduction in Gemini 2.5
 - Clean multi-agent architecture (General → Calendar → CorrectorAgent/AppointmentCRUD)
 
 ## Architecture Overview
@@ -49,16 +48,6 @@ All tools use google-api-python-client for direct Google Calendar API access
 ├── requirements.txt
 └── README.md
 ```
-
-## Why We Use Direct Calendar API Integration
-
-| Reason                          | Benefit |
-|--------------------------------|--------|
-| No external MCP server needed | Simpler deployment, fewer dependencies |
-| Full control over error messages & availability logic | Better UX |
-| Custom business rules (work hours, holidays) | Flexible scheduling |
-| Timezone-aware operations | Correct local time handling |
-| Direct tool access for agents | Faster, more reliable |
 
 ## Session Management with ADK
 
@@ -196,30 +185,3 @@ Time formats supported: "10:00", "10.00", "10", "3pm", "1 pm"
 - **Idempotency**: Use event IDs to prevent duplicate bookings
 - **Implicit Caching**: Gemini 2.5 automatically caches repeated context, user info prepended to trigger cache hits
 - **Clean Logging**: INFO level for user messages and agent instructions only
-
-## Implicit Context Caching
-
-The system leverages Google Gemini 2.5's automatic context caching feature to reduce API costs and improve response times.
-
-### How It Works
-- **Automatic**: Gemini 2.5 models cache repeated content by default (no code needed)
-- **Minimum tokens**: 1,024 tokens for gemini-2.5-flash
-- **Optimization**: User information (name, email, phone) is extracted and prepended to each request
-- **Cache hits**: Consistent prefix format triggers automatic cache reuse
-
-### Benefits
-- **Lower Costs**: Cache hits are processed at reduced rates
-- **Faster Responses**: Cached content is not reprocessed
-- **Better UX**: Users don't repeat their information
-- **Zero Overhead**: No explicit cache management needed
-
-### Implementation
-The `TelegramAgent` extracts user information from messages and prepends it:
-```
-[User Info from previous messages: Name: John Doe, Email: john@example.com, Phone: 1234567890]
-
-<current user message>
-```
-
-This consistent prefix format triggers Gemini 2.5's implicit caching automatically.
-
