@@ -44,65 +44,125 @@ from tools.calendar_tools import (
 treatment_information_agent = LlmAgent(
     name="TreatmentInformationAgent",
     model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
-    instruction="""Provide treatment information using the data given below.
-    
-    The treatments available are:
-        "General Consultation",
-        "Pediatric Dental Care",
-        "Wisdom Tooth Removal",
-        "Nail Polish",
-        "Nail Repair",
-        "Nail Filling",
-        "Nail Strengthening",
-        "Nail Sculpting",
-        "Nail Overlay",
-        "Nail Extension",
-        "Foot Asportation",
-        "Foot Resection",
-        "Foot Cleaning",
-        "Foot Debridement",
-        "Foot Dressing",
-        "Foot Bandaging".
+    instruction="""Provide treatment information using the tool check_treatment_type(). If the user inquires about available treatments, use the tool without any arguments to get the list.
+
         If the user asks for treatments, list them clearly. If they ask for specific treatment details, provide concise info.
         For any other queries, respond appropriately based on the treatments listed above.
-    """)
+    """,
+    tools=[FunctionTool(func=check_treatment_type)]
+    )
 
 # 1. Specialist Agent for Date/Time Parsing and Validation
 corrector_agent = LlmAgent(
     name="CorrectorAgent",
     model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
     instruction="""
-    You are an agent that identifies and corrects date and time inputs.
-    If the user provides relative dates ("today", "tomorrow", "next Monday"), call get_current_date(), use the output to understand which date user wants in his query in "YYYY-MM-DD" format. Then send the date you identified to parse_date_expression().
-    
-    If the user provides only the date like "24th", then assume it as the next occurrence of that date in the future. call get_current_date() to understand the current date context. use current date to determine the correct month and year the user is referring to. 
-    Remember to always return the date you determined in ISO format (YYYY-MM-DD).
-    
-    Parse date expressions into ISO format (YYYY-MM-DD). Then use parse_date_expression() function and normalize time to 24-hour format.
+        You are an agent that identifies and corrects date and time inputs into ISO format.
 
-    Process:
-    1. Call get_current_date() to establish reference date (format: "YYYY-MM-DD").
-    2. Correct the users date input to ISO format with relevant year/month/day. 
-        Remember that "24th" means the next occurrence of the 24th in the future.
-        If the date has already passed this month, move to next month.
-        - Remove ordinal indicators: "12th" → "12", "3rd" → "3", "24th" → "24"
-        - Expand abbreviations if needed: "dec" → "december", "jan" → "january"
-        - Add current/next year if not provided
+        Your goal: Convert any date input into ISO format (YYYY-MM-DD) and normalize time to 24-hour format.
+
+        WORKFLOW:
+
+        1. ESTABLISH REFERENCE DATE
+        Call get_current_date() to get today's date in ISO format (YYYY-MM-DD).
+
+        2. NORMALIZE DATE INPUT
+        Analyze the user's date input and convert it to ISO format (YYYY-MM-DD):
+
+        A. If ALREADY in ISO format (YYYY-MM-DD):
+            ✓ Skip parse_date_expression() 
+            ✓ Use the date as-is
+            ✓ Proceed to step 3
         
-        Examples of normalization:
-        - "12th dec" → "december 12, 2025"
-        - "24th" → "december 24, 2025" (if today is Dec 1, 2025)
-        - "24th" → "january 24, 2026" (if today is Dec 25, 2025 and 24th has passed)
-        - "tomorrow" → keep as "tomorrow"
+        B. If RELATIVE date (today, tomorrow, next Monday):
+            ✓ Call parse_date_expression() with the exact user input
+            ✓ Use the returned ISO date from parse_date_expression()
         
-        IMPORTANT: Use the output of get_current_date(), understand the date user refers to in his query and change it into 'YYYY-MM-DD' format before giving it to parse_date_expression().
-    2. Call parse_date_expression() with corrected user's date input.
-    3. Convert time to 24-hour format (default "09:00" if not provided):
-       - AM: 12 AM→00:00, 1-11 AM→01:00-11:00
-       - PM: 12 PM→12:00, 1-11 PM→13:00-23:00
-    4. IMPORTANT:Check if the date is a holiday using is_it_holiday(). If it is, inform the user that bookings cannot be made on holidays and ask for an alternative date. If the user have already given other necessary booking details, store them in context for future use.
-    5. Always respond with text: "Validated date: YYYY-MM-DD, time: HH:MM"
-    """, output_key="validated_datetime",
+        C. If PARTIAL date (only day number like "24th", "12th"):
+            ✓ Determine full date based on get_current_date() output:
+                - Remove ordinal: "24th" → "24"
+                - If day number > current day in month → use current month/year
+                - If day number ≤ current day in month → use next month/year
+            ✓ Format as "Month Day, Year": e.g., "December 24, 2025"
+            ✓ Call parse_date_expression() with this formatted string
+            ✓ Use the returned ISO date
+        
+        D. If DATE with month name (12th Dec, December 24, 24 November 2025):
+            ✓ Normalize format:
+                - Remove ordinals: "12th dec" → "12 dec"
+                - Expand abbreviations: "dec" → "december"
+                - Add year if missing (use current or next year based on whether date has passed)
+            ✓ Format as: "December 12, 2025" or "12 December 2025"
+            ✓ Call parse_date_expression() with this formatted string
+            ✓ Use the returned ISO date
+
+        3. NORMALIZE TIME
+        Convert time to 24-hour format:
+        - If no time provided → default to "09:00"
+        - If AM/PM format:
+            * 12 AM → 00:00
+            * 1-11 AM → 01:00-11:00
+            * 12 PM → 12:00
+            * 1-11 PM → 13:00-23:00
+        - If already 24-hour format → use as-is
+
+        4. HOLIDAY CHECK
+        Call is_it_holiday() with the ISO date.
+        - If holiday: 
+            * Inform user that bookings cannot be made on holidays
+            * Ask for an alternative date
+            * Remember other booking details provided (name, email, phone, treatment)
+        - If not holiday: proceed to step 5
+
+        5. RESPOND
+        Always respond with: "Validated date: YYYY-MM-DD, time: HH:MM"
+
+        EXAMPLES:
+
+        Input: "2025-12-24"
+        → Already ISO format, skip parse_date_expression()
+        → Output: "Validated date: 2025-12-24, time: 09:00"
+
+        Input: "tomorrow"
+        → Call parse_date_expression("tomorrow")
+        → Returns: {'date': '2025-12-02', ...}
+        → Output: "Validated date: 2025-12-02, time: 09:00"
+
+        Input: "24th" (today is 2025-12-01)
+        → 24 > 01, so use current month
+        → Format: "December 24, 2025"
+        → Call parse_date_expression("December 24, 2025")
+        → Returns: {'date': '2025-12-24', ...}
+        → Output: "Validated date: 2025-12-24, time: 09:00"
+
+        Input: "24th" (today is 2025-12-30)
+        → 24 < 30, so use next month
+        → Format: "January 24, 2026"
+        → Call parse_date_expression("January 24, 2026")
+        → Returns: {'date': '2026-01-24', ...}
+        → Output: "Validated date: 2026-01-24, time: 09:00"
+
+        Input: "12th dec"
+        → Remove ordinal: "12 dec"
+        → Expand: "december 12"
+        → Add year: "december 12, 2025"
+        → Call parse_date_expression("december 12, 2025")
+        → Returns: {'date': '2025-12-12', ...}
+        → Output: "Validated date: 2025-12-12, time: 09:00"
+
+        Input: "next Tuesday at 3pm"
+        → Call parse_date_expression("next Tuesday")
+        → Returns: {'date': '2025-12-03', ...}
+        → Convert time: 3pm → 15:00
+        → Output: "Validated date: 2025-12-03, time: 15:00"
+
+        CRITICAL RULES:
+        - NEVER call parse_date_expression() if date is already in YYYY-MM-DD format
+        - ALWAYS call get_current_date() first to establish reference
+        - ALWAYS normalize dates before calling parse_date_expression() (except for relative dates like "tomorrow")
+        - ALWAYS check for holidays before final validation
+        - ALWAYS respond with the exact format: "Validated date: YYYY-MM-DD, time: HH:MM"
+        """, output_key="validated_datetime",
     tools=[
         FunctionTool(func=get_current_date),
         FunctionTool(func=parse_date_expression),
@@ -211,7 +271,7 @@ calendar_agent = LlmAgent(
 Gather all required fields:
 - **Date**: If ambiguous (e.g., "tomorrow", "the 24th", "next Friday"):
   1. Call `get_current_date()` first
-  2. Delegate to `date_and_slot_finder_agent` (it will parse the date AND find slots)
+  2. Delegate to `DateAndSlotFinderAgent` (it will parse the date AND find slots)
   3. Confirm the parsed date with user
   4. Do NOT call date parsing again unless user requests a change
 - **Time**: Ask if not provided (default: 09:00 if user agrees)
@@ -220,10 +280,10 @@ Gather all required fields:
 
 ### Stage 2: VALIDATION OF SLOTS
 **Slot Availability Check:**
-- The slots were already retrieved by `date_and_slot_finder_agent` in Stage 1
+- The slots were already retrieved by `DateAndSlotFinderAgent` in Stage 1
 - Verify the requested time is in the available slots
 - If not available → ask for alternative time or date
-- If new date needed → delegate to `date_and_slot_finder_agent` again
+- If new date needed → delegate to `DateAndSlotFinderAgent` again
 
 ### Stage 3: VALIDATION OF DETAILS
 Before proceeding with booking, verify ALL five required fields are present:
@@ -234,7 +294,7 @@ Before proceeding with booking, verify ALL five required fields are present:
 ✓ Phone
 
 **Slot Availability Check:**
-1. Delegate to `date_and_slot_finder_agent` with the requested date
+1. Delegate to `DateAndSlotFinderAgent` with the requested date
 2. If slots available at requested time → proceed to Stage 3
 3. If no slots available → inform user and ask for alternative date
 4. Return to Stage 1 if new date needed
@@ -288,7 +348,7 @@ Then, Use the AppointmentCRUD agent if you have the date and time of the existin
   - Call once per date input
   - Stop using once date is confirmed by user
   
-- **`date_and_slot_finder_agent`** - Find available slots for a date
+- **`DateAndSlotFinderAgent`** - Find available slots for a date
   - Use for ALL slot availability queries
   - Use in Stage 2 validation before booking
   - Use when answering interruptible queries about availability
