@@ -54,10 +54,13 @@ All tools use google-api-python-client for direct Google Calendar API access
 
 ## USE CASES
 
-### Booking
-
+### Booking Workflow Video
 [![BookingAppointmentVideo](./imgs/1.png)](https://youtu.be/v3IPiA3jSa4)
+
+### Rescheduling Workflow Video
 [![ReschedulingAppointmentVideo](./imgs/6.png)](https://youtu.be/rN6lQHEzuew)
+
+### Elimination Workflow Video
 [![RemovingAppointmentVideo](./imgs/7.png)](https://youtu.be/t8ux50m9qfA)
 
 
