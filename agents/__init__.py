@@ -5,7 +5,7 @@ Import once here, use everywhere
 
 # Google ADK Core
 from google.genai import types
-from google.adk.agents import LlmAgent
+from google.adk.agents import LlmAgent, SequentialAgent
 from google.adk.models.google_llm import Gemini
 #from google.adk.runners import InMemoryRunner
 from google.adk.sessions import InMemorySessionService
@@ -40,6 +40,7 @@ __all__ = [
     'InMemorySessionService',
     'google_search',
     'AgentTool',
+    'SequentialAgent',
     'ToolContext',
     'BuiltInCodeExecutor',
     'retry_config',

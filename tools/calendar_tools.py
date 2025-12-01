@@ -14,7 +14,6 @@ from typing import Tuple, List, Optional
 import re
 from urllib.parse import quote
 
-
 # read/write ops
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
@@ -34,6 +33,46 @@ def normalize_phone(phone: Optional[str]) -> Optional[str]:
     leading_plus = phone.startswith('+')
     digits = re.sub(r'\D', '', phone)
     return ('+' + digits) if leading_plus else digits
+
+
+def build_public_add_link(treatment: str, full_name: str, email: Optional[str], phone: Optional[str], start_dt: datetime.datetime, end_dt: datetime.datetime) -> Optional[str]:
+    """Build a shareable Google Calendar TEMPLATE link for the appointment.
+
+    Args:
+        treatment: Treatment or service name.
+        full_name: Person full name.
+        email: Contact email (optional).
+        phone: Contact phone (optional).
+        start_dt: Timezone-aware start datetime.
+        end_dt: Timezone-aware end datetime.
+
+    Returns:
+        A URL string or None if construction fails.
+    """
+    try:
+        # Convert start/end to UTC for template link
+        start_utc = start_dt.astimezone(datetime.timezone.utc)
+        end_utc = end_dt.astimezone(datetime.timezone.utc)
+        fmt = "%Y%m%dT%H%M%SZ"
+        dates_param = f"{start_utc.strftime(fmt)}/{end_utc.strftime(fmt)}"
+
+        text_param = quote(f"{treatment} - {full_name}")
+        details_lines = [
+            f"Treatment: {treatment}",
+            f"Name: {full_name}",
+        ]
+        if email:
+            details_lines.append(f"Email: {email}")
+        if phone:
+            details_lines.append(f"Phone: {phone}")
+        details_param = quote("\n".join(details_lines))
+
+        return (
+            f"https://calendar.google.com/calendar/render?action=TEMPLATE"
+            f"&text={text_param}&dates={dates_param}&details={details_param}"
+        )
+    except Exception:
+        return None
 
 
 def check_treatment_type(treatment_type: Optional[str] = None) -> dict:
@@ -128,19 +167,33 @@ def return_available_slots(date: str) -> dict:
         >>> return_available_slots("2025-11-28")
         {'status': 'approved', 'date': '2025-11-28', 'available_slots': ['09:00', '10:00', ...], 'message': '5 slots available'}
     """
-    # Validate work day
+    # Differentiate early error conditions
+    # 1. Invalid date format
+    try:
+        parsed_dt = parse_date_to_datetime(date)
+    except ValueError:
+        return {
+            'status': 'rejected',
+            'date': date,
+            'available_slots': [],
+            'error_type': 'invalid_date',
+            'message': f"'{date}' is not a valid date format. Please use ISO YYYY-MM-DD or supported variants."
+        }
+
+    # 2. Holiday / weekend
     if is_it_holiday(date):
         return {
             'status': 'rejected',
             'date': date,
             'available_slots': [],
-            'message': f'{date} is a weekend or holiday - no appointments available'
+            'error_type': 'holiday',
+            'message': f'{date} is a holiday or weekend. Business operates Monday-Friday, excluding listed holidays.'
         }
-    
+
     try:
         service = get_calendar_service()
         local_tz = ZoneInfo('Europe/Rome')
-        dt = parse_date_to_datetime(date)
+        dt = parsed_dt
         
         # Get all events for this day
         day_start = dt.replace(hour=0, minute=0, second=0, tzinfo=local_tz)
@@ -195,6 +248,7 @@ def return_available_slots(date: str) -> dict:
             'status': 'rejected',
             'date': date,
             'available_slots': [],
+            'error_type': 'internal_error',
             'message': f'Error checking availability: {str(e)}'
         }
 
@@ -343,226 +397,223 @@ def get_current_date() -> str:
     now = datetime.datetime.now()
     return f"Today is {now.strftime('%A, %B %d, %Y')} (ISO: {now.strftime('%Y-%m-%d')}). Current time is {now.strftime('%H:%M')}."
 
+
 def parse_date_expression(expression: str) -> dict:
-    """Parse natural language date expressions into ISO format dates.
+    """
+    Parse natural language date expressions into ISO format (YYYY-MM-DD).
     
-    Handles relative dates (tomorrow, next Tuesday, in 3 days) and absolute dates.
-    
-    Args:
-        expression (str): Natural language date expression like:
-            - "tomorrow"
-            - "next Tuesday"
-            - "next week"
-            - "in 3 days"
-            - "December 5"
-            - "2025-12-05"
+    Supported expressions:
+        - today, tomorrow, day after tomorrow
+        - yesterday
+        - in 3 days, in 2 weeks
+        - next monday, next week, next month
+        - this monday, this friday
+        - monday, tuesday (upcoming, including today)
+        - december 5, dec 25, 25 december, 25 dec 2025
+        - 2025-12-25, 25/12/2025, 25.12.2025, 12/25/2025
+        - 25 december 2025 at 3pm → ignores time part
     
     Returns:
-        dict: Dictionary with parsed date information:
-            - status (str): 'success' or 'error'
-            - date (str): ISO format date (YYYY-MM-DD) if successful
-            - day_name (str): Day of week name (e.g., "Monday")
-            - message (str): Description or error message
-    
-    Examples:
-        >>> parse_date_expression("tomorrow")
-        {'status': 'success', 'date': '2025-11-28', 'day_name': 'Thursday', 'message': 'Tomorrow is Thursday, November 28, 2025'}
-        
-        >>> parse_date_expression("next tuesday")
-        {'status': 'success', 'date': '2025-12-03', 'day_name': 'Tuesday', 'message': 'Next Tuesday is December 03, 2025'}
+        dict with keys:
+            - status: 'success' or 'error'
+            - date: 'YYYY-MM-DD' (if success)
+            - day_name: full weekday name
+            - message: human-readable description
     """
-    try:
-        now = datetime.datetime.now()
-        expression_lower = expression.lower().strip()
-        
-        # Remove common time indicators to extract just the date part
-        # Handle patterns like "tomorrow at 10:00", "next Tuesday at 3pm", etc.
-        time_separators = [' at ', ' @', ',']
-        for separator in time_separators:
-            if separator in expression_lower:
-                expression_lower = expression_lower.split(separator)[0].strip()
-                break
-        
-        # Handle "today"
-        if expression_lower == "today":
-            return {
-                'status': 'success',
-                'date': now.strftime('%Y-%m-%d'),
-                'day_name': now.strftime('%A'),
-                'message': f"Today is {now.strftime('%A, %B %d, %Y')}"
-            }
-        
-        # Handle "tomorrow"
-        if expression_lower == "tomorrow":
-            tomorrow = now + datetime.timedelta(days=1)
-            return {
-                'status': 'success',
-                'date': tomorrow.strftime('%Y-%m-%d'),
-                'day_name': tomorrow.strftime('%A'),
-                'message': f"Tomorrow is {tomorrow.strftime('%A, %B %d, %Y')}"
-            }
-        
-        # Handle "day after tomorrow"
-        if expression_lower in ["day after tomorrow", "overmorrow"]:
-            day_after = now + datetime.timedelta(days=2)
-            return {
-                'status': 'success',
-                'date': day_after.strftime('%Y-%m-%d'),
-                'day_name': day_after.strftime('%A'),
-                'message': f"Day after tomorrow is {day_after.strftime('%A, %B %d, %Y')}"
-            }
-        
-        # Handle "next week"
-        if expression_lower == "next week":
-            next_week = now + datetime.timedelta(days=7)
-            return {
-                'status': 'success',
-                'date': next_week.strftime('%Y-%m-%d'),
-                'day_name': next_week.strftime('%A'),
-                'message': f"Next week (same day) is {next_week.strftime('%A, %B %d, %Y')}"
-            }
-        
-        # Handle "in X days"
-        if expression_lower.startswith("in ") and "day" in expression_lower:
-            try:
-                parts = expression_lower.split()
-                days_idx = next(i for i, word in enumerate(parts) if "day" in word)
-                num_days = int(parts[days_idx - 1])
-                target_date = now + datetime.timedelta(days=num_days)
-                return {
-                    'status': 'success',
-                    'date': target_date.strftime('%Y-%m-%d'),
-                    'day_name': target_date.strftime('%A'),
-                    'message': f"In {num_days} days is {target_date.strftime('%A, %B %d, %Y')}"
-                }
-            except (ValueError, StopIteration):
-                pass
-        
-        # Handle "next [weekday]" or just "[weekday]"
-        weekdays = {
-            'monday': 0, 'mon': 0,
-            'tuesday': 1, 'tue': 1,
-            'wednesday': 2, 'wed': 2,
-            'thursday': 3, 'thu': 3,
-            'friday': 4, 'fri': 4,
-            'saturday': 5, 'sat': 5,
-            'sunday': 6, 'sun': 6
+    if not expression or not expression.strip():
+        return {'status': 'error', 'message': 'Empty date expression'}
+
+    from datetime import datetime as dett, timedelta
+
+    original = expression.strip()
+    text = original.lower().strip()
+
+    now = dett.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_weekday = now.weekday()  # 0=Mon ... 6=Sun
+
+    # Remove time part if present (e.g. "tomorrow at 3pm" → "tomorrow")
+    text = re.sub(r'\s+(at|@|from|on)\s+(\d{1,2} ?(am|pm|o\'?clock|:.*)|noon|midnight)', '', text)
+    text = text.replace(',', '')
+    text = text.strip()
+
+    # ------------------------------------------------------------------
+    # 1. Quick exact matches
+    # ------------------------------------------------------------------
+    if text in ['today', 'now']:
+        return {
+            'status': 'success',
+            'date': now.strftime('%Y-%m-%d'),
+            'day_name': now.strftime('%A'),
+            'message': f"Today is {now.strftime('%A, %B %d, %Y')}"
         }
-        
-        for day_name, day_num in weekdays.items():
-            if day_name in expression_lower:
-                current_weekday = now.weekday()
-                
-                # Calculate days until target weekday
-                if "next" in expression_lower:
-                    # "next Tuesday" means the Tuesday in the next week
-                    days_ahead = day_num - current_weekday
-                    if days_ahead <= 0:
-                        days_ahead += 7
-                    # Always go to next week for "next [weekday]"
-                    if days_ahead < 7:
-                        days_ahead += 7
-                else:
-                    # Just "Tuesday" means the upcoming Tuesday (could be today if it's Tuesday)
-                    days_ahead = day_num - current_weekday
-                    if days_ahead < 0:
-                        days_ahead += 7
-                
-                target_date = now + datetime.timedelta(days=days_ahead)
-                return {
-                    'status': 'success',
-                    'date': target_date.strftime('%Y-%m-%d'),
-                    'day_name': target_date.strftime('%A'),
-                    'message': f"{'Next ' if 'next' in expression_lower else ''}{target_date.strftime('%A')} is {target_date.strftime('%B %d, %Y')}"
-                }
-        
-        # Handle ISO format dates (YYYY-MM-DD)
-        if len(expression_lower) == 10 and expression_lower.count('-') == 2:
-            try:
-                parsed_date = datetime.datetime.strptime(expression, '%Y-%m-%d')
-                return {
-                    'status': 'success',
-                    'date': parsed_date.strftime('%Y-%m-%d'),
-                    'day_name': parsed_date.strftime('%A'),
-                    'message': f"{parsed_date.strftime('%A, %B %d, %Y')}"
-                }
-            except ValueError:
-                pass
-        
-        # Handle numeric dates with spaces or slashes (e.g., "28 11 2025", "28/11/2025", "11-28-2025")
-        numeric_date_formats = [
-            '%d %m %Y',     # 28 11 2025
-            '%d/%m/%Y',     # 28/11/2025
-            '%d-%m-%Y',     # 28-11-2025
-            '%m/%d/%Y',     # 11/28/2025 (US format)
-            '%m-%d-%Y',     # 11-28-2025 (US format)
-            '%Y %m %d',     # 2025 11 28
-            '%Y/%m/%d',     # 2025/11/28
-        ]
-        
-        for fmt in numeric_date_formats:
-            try:
-                parsed_date = datetime.datetime.strptime(expression_lower.strip(), fmt)
-                return {
-                    'status': 'success',
-                    'date': parsed_date.strftime('%Y-%m-%d'),
-                    'day_name': parsed_date.strftime('%A'),
-                    'message': f"{parsed_date.strftime('%A, %B %d, %Y')}"
-                }
-            except ValueError:
-                continue
-        
-        # Handle month names (e.g., "December 5", "Dec 5", "28 november 2025")
-        month_names = ['january', 'february', 'march', 'april', 'may', 'june',
-                      'july', 'august', 'september', 'october', 'november', 'december',
-                      'jan', 'feb', 'mar', 'apr', 'may', 'jun',
-                      'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
-        
-        for month in month_names:
-            if month in expression_lower:
+
+    if text in ['tomorrow', 'tmr', 'tom']:
+        dt = now + timedelta(days=1)
+        return {
+            'status': 'success',
+            'date': dt.strftime('%Y-%m-%d'),
+            'day_name': dt.strftime('%A'),
+            'message': f"Tomorrow is {dt.strftime('%A, %B %d, %Y')}"
+        }
+
+    if text in ['day after tomorrow', 'overmorrow']:
+        dt = now + timedelta(days=2)
+        return {
+            'status': 'success',
+            'date': dt.strftime('%Y-%m-%d'),
+            'day_name': dt.strftime('%A'),
+            'message': f"Day after tomorrow is {dt.strftime('%A, %B %d, %Y')}"
+        }
+
+    if text == 'yesterday':
+        dt = now - timedelta(days=1)
+        return {
+            'status': 'success',
+            'date': dt.strftime('%Y-%m-%d'),
+            'day_name': dt.strftime('%A'),
+            'message': f"Yesterday was {dt.strftime('%A, %B %d, %Y')}"
+        }
+
+    # ------------------------------------------------------------------
+    # 2. "in X days/weeks/months"
+    # ------------------------------------------------------------------
+    in_match = re.match(r'in\s+(\d+)\s+(day|days|week|weeks|month|months)', text)
+    if in_match:
+        num = int(in_match.group(1))
+        unit = in_match.group(2)
+        if 'week' in unit:
+            dt = now + timedelta(weeks=num)
+        elif 'month' in unit:
+            year = now.year + (now.month + num - 1) // 12
+            month = (now.month + num - 1) % 12 + 1
+            day = now.day
+            # Handle month overflow (e.g. Jan 31 → Feb → use last day of Feb)
+            while True:
                 try:
-                    # Try to parse various date formats
-                    for fmt in [
-                        '%B %d',           # December 5
-                        '%b %d',           # Dec 5
-                        '%B %d, %Y',       # December 5, 2025
-                        '%b %d, %Y',       # Dec 5, 2025
-                        '%d %B %Y',        # 28 November 2025
-                        '%d %b %Y',        # 28 Nov 2025
-                        '%d %B',           # 28 November
-                        '%d %b',           # 28 Nov
-                    ]:
-                        try:
-                            parsed_date = datetime.datetime.strptime(expression, fmt)
-                            # If year not specified, use current year or next year if date has passed
-                            if parsed_date.year == 1900:  # Default year from strptime
-                                parsed_date = parsed_date.replace(year=now.year)
-                                # If date has passed, use next year
-                                if parsed_date < now:
-                                    parsed_date = parsed_date.replace(year=now.year + 1)
-                            
-                            return {
-                                'status': 'success',
-                                'date': parsed_date.strftime('%Y-%m-%d'),
-                                'day_name': parsed_date.strftime('%A'),
-                                'message': f"{parsed_date.strftime('%A, %B %d, %Y')}"
-                            }
-                        except ValueError:
-                            continue
-                except:
-                    pass
-        
-        # If we couldn't parse it, return error
+                    dt = now.replace(year=year, month=month, day=day)
+                    break
+                except ValueError:
+                    day -= 1
+            dt = dt.replace(day=day)
+        else:
+            dt = now + timedelta(days=num)
         return {
-            'status': 'error',
-            'message': f"Could not parse date expression: '{expression}'. Please use expressions like 'tomorrow', 'next Tuesday', 'December 5', or ISO format 'YYYY-MM-DD'"
+            'status': 'success',
+            'date': dt.strftime('%Y-%m-%d'),
+            'day_name': dt.strftime('%A'),
+            'message': f"In {num} {unit} → {dt.strftime('%A, %B %d, %Y')}"
         }
-    
-    except Exception as e:
+
+    # ------------------------------------------------------------------
+    # 3. Weekdays: "next monday", "this friday", "monday"
+    # ------------------------------------------------------------------
+    weekdays = {
+        'monday': 0, 'mon': 0,
+        'tuesday': 1, 'tue': 1, 'tues': 1,
+        'wednesday': 2, 'wed': 2,
+        'thursday': 3, 'thu': 3, 'thurs': 3,
+        'friday': 4, 'fri': 4,
+        'saturday': 5, 'sat': 5,
+        'sunday': 6, 'sun': 6,
+    }
+
+    weekday_match = None
+    target_wd = None
+    for name, wd in weekdays.items():
+        if name in text:
+            weekday_match = text
+            target_wd = wd
+            break
+
+    if target_wd is not None:
+        days_ahead = (target_wd - today_weekday + 7) % 7
+
+        if 'next' in text:
+            # "next monday" = first occurrence strictly after today
+            if days_ahead == 0:        # today is Monday
+                days_ahead = 7
+            else:
+                days_ahead += 7        # push to next week if already upcoming this week
+        elif 'this' in text:
+            # "this monday" = Monday of current week (even if past)
+            days_ahead = target_wd - today_weekday
+            if days_ahead > 0:
+                days_ahead -= 7
+        else:
+            # plain "monday" = upcoming (including today)
+            if days_ahead == 0:
+                days_ahead = 0  # today
+            # else: already correct (1–6 days ahead)
+
+        dt = now + timedelta(days=days_ahead)
+        prefix = 'Next ' if 'next' in text else ('This ' if 'this' in text else '')
         return {
-            'status': 'error',
-            'message': f"Error parsing date: {str(e)}"
+            'status': 'success',
+            'date': dt.strftime('%Y-%m-%d'),
+            'day_name': dt.strftime('%A'),
+            'message': f"{prefix}{dt.strftime('%A, %B %d, %Y')}"
         }
+
+    # ------------------------------------------------------------------
+    # 4. "next week" / "this week"
+    # ------------------------------------------------------------------
+    if text == 'next week':
+        dt = now + timedelta(days=7)
+        return {
+            'status': 'success',
+            'date': dt.strftime('%Y-%m-%d'),
+            'day_name': dt.strftime('%A'),
+            'message': f"Next week (same weekday): {dt.strftime('%A, %B %d, %Y')}"
+        }
+
+    # ------------------------------------------------------------------
+    # 5. Try direct parsing with multiple common formats
+    # ------------------------------------------------------------------
+    trial_formats = [
+        '%Y-%m-%d',           # 2025-12-25
+        '%Y/%m/%d',           # 2025/12/25
+        '%Y.%m.%d',           # 2025.12.25
+        '%d-%m-%Y',           # 25-12-2025
+        '%d/%m/%Y',           # 25/12/2025
+        '%d.%m.%Y',           # 25.12.2025
+        '%d %m %Y',           # 25 12 2025
+        '%m/%d/%Y',           # 12/25/2025 (US)
+        '%B %d %Y',           # December 25 2025
+        '%b %d %Y',           # Dec 25 2025
+        '%d %B %Y',           # 25 December 2025
+        '%d %b %Y',           # 25 Dec 2025
+        '%B %d',              # December 25 → current or next year
+        '%b %d',              # Dec 25
+        '%d %B',              # 25 December
+        '%d %b',              # 25 Dec
+    ]
+
+    for fmt in trial_formats:
+        try:
+            dt = dett.strptime(text, fmt)
+            # If year missing → assume current or next year
+            if dt.year == 1900:
+                dt = dt.replace(year=now.year)
+                if dt.replace(hour=0, minute=0, second=0, microsecond=0) < now:
+                    dt = dt.replace(year=now.year + 1)
+            result = {
+                'status': 'success',
+                'date': dt.strftime('%Y-%m-%d'),
+                'day_name': dt.strftime('%A'),
+                'message': dt.strftime('%A, %B %d, %Y')
+            }
+            return result
+        except ValueError:
+            continue
+
+    # ------------------------------------------------------------------
+    # 6. Final fallback error
+    # ------------------------------------------------------------------
+    return {
+        'status': 'error',
+        'message': f"Could not understand date: '{original}'. "
+                   "Try: tomorrow, next Friday, December 25, 2025-12-25, in 5 days, etc."
+    }
 
 def find_next_available_slot(date: str, time: str, max_attempts: int = 10) -> dict:
     """Find the next available time slot starting from the given date/time.
@@ -908,29 +959,14 @@ def insert_appointment(full_name: str, email: str, phone: str, date: str, time: 
         # Allow inserting into a public-facing calendar when configured
         target_calendar_id = os.getenv('PUBLIC_CALENDAR_ID', 'primary')
         event = service.events().insert(calendarId=target_calendar_id, body=event).execute()
-        # Build a public "Add to Google Calendar" template link (shareable without requiring access)
-        try:
-            # Convert start/end to UTC for template link
-            start_utc = start_dt.astimezone(datetime.timezone.utc)
-            end_utc = end_time.astimezone(datetime.timezone.utc)
-            fmt = "%Y%m%dT%H%M%SZ"
-            dates_param = f"{start_utc.strftime(fmt)}/{end_utc.strftime(fmt)}"
-
-            text_param = quote(f"{treatment} - {full_name}")
-            details_lines = [
-                f"Treatment: {treatment}",
-                f"Name: {full_name}",
-                f"Email: {email}",
-                f"Phone: {phone}",
-            ]
-            details_param = quote("\n".join(details_lines))
-
-            public_add_link = (
-                f"https://calendar.google.com/calendar/render?action=TEMPLATE"
-                f"&text={text_param}&dates={dates_param}&details={details_param}"
-            )
-        except Exception:
-            public_add_link = None
+        public_add_link = build_public_add_link(
+            treatment=treatment,
+            full_name=full_name,
+            email=email,
+            phone=phone,
+            start_dt=start_dt,
+            end_dt=end_time,
+        )
 
         # Prefer the shareable add-to-calendar link in the message to avoid private links confusion
         lines = [
@@ -1273,6 +1309,22 @@ def move_appointment(email: str = None, phone: str = None, new_date: str = None,
                     verification_parts.append('phone')
                 verification_method = 'verified via ' + ' & '.join(verification_parts) if verification_parts else 'identifier'
 
+                # Attempt to extract structured info for link
+                if event_summary and ' - ' in event_summary:
+                    treatment_part, full_name_part = event_summary.split(' - ', 1)
+                else:
+                    treatment_part = 'Appointment'
+                    full_name_part = event_summary or 'Unknown'
+
+                public_add_link = build_public_add_link(
+                    treatment=treatment_part,
+                    full_name=full_name_part,
+                    email=email,
+                    phone=phone,
+                    start_dt=start_dt,
+                    end_dt=end_dt,
+                )
+
                 return {
                     'status': 'approved',
                     'order_id': event_id,
@@ -1280,6 +1332,8 @@ def move_appointment(email: str = None, phone: str = None, new_date: str = None,
                     'old_date': old_date,
                     'new_date': new_date,
                     'new_time': new_time,
+                    'link': updated_event.get('htmlLink'),
+                    'public_add_link': public_add_link,
                     'message': f"Appointment '{event_summary}' successfully rescheduled from {old_date} at {old_time} to {new_date} at {new_time} ({verification_method})"
                 }
         

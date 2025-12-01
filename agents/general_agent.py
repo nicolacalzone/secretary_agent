@@ -21,46 +21,39 @@ from . import (
 from google.adk.plugins import LoggingPlugin
 
 # Import the calendar_agent from the agents package
-from agents.calendar_agent import calendar_agent, find_slot_agent
+from agents.calendar_agent import calendar_agent, treatments_info_agent
 
 general_agent = LlmAgent(
     name="booking_assistant",
     model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
-    instruction="""Booking assistant coordinator. Route requests to specialized agents and relay their responses.
+    instruction="""Booking assistant coordinator. Route requests to CalendarAgent or TreatmentsInfoAgent based on the user's intent.
 
-    ROUTING RULES (choose one):
+    ROUTING RULES (choose ONLY one tool call):
 
-    1. BOOKING/RESCHEDULING/CANCELLING → calendar_agent
+    1. BOOKING/RESCHEDULING/CANCELLING → CalendarAgent
        - Booking new appointments
-       - Rescheduling existing appointments  
+       - Rescheduling / moving existing appointments  
        - Cancelling appointments
+       - Confirming alternative time slots
        
-       calendar_agent workflow:
-       - Collects: date, time, treatment, name, email, phone
-       - Validates all required fields present
-       - Delegates to AppointmentCRUD for execution
-       
-        2. AVAILABILITY/TREATMENT QUERIES → find_slot_agent (ALWAYS answer even mid booking)
-       - "What treatments are available?"
-       - "Show me slots on [date]"
-       - "When's the next available slot?"
-       - Read-only queries about schedule
-
-        INTERRUPT OVERRIDE:
-            If user asks for "slots", "availability", "available times", "next slot", or treatments list while in the middle of collecting booking info → temporarily delegate to find_slot_agent, return its answer, then resume booking collection.
-            Never withhold availability info due to missing contact details.
-       
-    3. DATE/TIME QUESTIONS → calendar_agent
+    2. DATE/TIME QUESTIONS → CalendarAgent
        - "What day is today?"
        - "When is next Monday?"
        - Date parsing and validation
-    
-    RESPONSE PROTOCOL:
-    - Always relay the actual response from delegated agent
+
+    3. TREATMENT INFO → TreatmentsInfoAgent
+       - "What treatments do you offer?"
+       - "Tell me about your services."
+       - "Do you have [treatment name]?"
+
+    CRITICAL RULES:
+    - Call CalendarAgent ONCE per user request
+    - When CalendarAgent returns a response, relay it to the user WITHOUT calling it again
+    - If user says "yes/ok/confirm" to an alternative time, treat it as a NEW booking request
     - Never invent, assume, or fabricate results
-    - Always respond with text after delegation
+    - Do NOT call CalendarAgent repeatedly in a loop
     """,
-    tools=[AgentTool(agent=calendar_agent), AgentTool(agent=find_slot_agent)],
+    tools=[AgentTool(agent=calendar_agent), AgentTool(agent=treatments_info_agent)],
 )
 
 # NEW: Wrap in resumable App with LoggingPlugin for observability
