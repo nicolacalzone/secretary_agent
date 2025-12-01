@@ -194,6 +194,8 @@ def before_slot_finder_callback(callback_context: CallbackContext) -> Optional[t
     # 2. Define the message based on whether a valid date was found
     if validated_output and "Validated date:" in str(validated_output):
         message_text = f"Use the verified date information from the previous agent: {validated_output}"
+    elif validated_output in str(validated_output):
+        message_text = f"Use the information about date/slot availablity from previous agent: {validated_output}"
     else:
         # Stop the agent from hallucinating if no valid date was found (e.g. holiday)
         message_text = (
