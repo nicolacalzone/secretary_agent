@@ -56,9 +56,9 @@ All tools use google-api-python-client for direct Google Calendar API access
 
 ### Booking
 
-![BookingAppointment](https://youtu.be/v3IPiA3jSa4)
-![ReschedulingAppointment](https://youtu.be/rN6lQHEzuew)
-![RemovingAppointment](https://youtu.be/t8ux50m9qfA)
+[![BookingAppointmentVideo]()(https://youtu.be/v3IPiA3jSa4)
+[![ReschedulingAppointmentVideo]()(https://youtu.be/rN6lQHEzuew)
+[![RemovingAppointmentVideo]()(https://youtu.be/t8ux50m9qfA)
 
 
 ## Session Management with ADK
