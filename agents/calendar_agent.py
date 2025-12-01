@@ -310,8 +310,14 @@ calendar_agent = LlmAgent(
 2. Use conversation memory - never re-ask for information already provided
 3. Always base responses on actual tool results - never fabricate data
 4. Respond after completing each logical step or tool sequence
-5. Always use 'CorrectorAgent' before any date parsing or validation to understand the date in 'YYYY-MM-DD' format. 
-
+5. When queries include only the date or time, and no other details necessary for booking were provided,"
+    use 'DateAndSlotFinderAgent' before any date parsing or validation to understand the date in 'YYYY-MM-DD' format, to check if the date is valid (not a holiday). 
+6. Use the result of DateAndSlotFinderAgent to inform the user about available slots or holiday status.
+7. If you already have the date in ISO format from previous interactions, do NOT call DateAndSlotFinderAgent again unless the user requests a change.
+8. Proceed with booking only after confirming all required fields are present and the requested date is valid.
+9. Highest priority is to ensure date validity and slot availability before booking. If these are correct then check if the service requested is available using check_treatment_type().
+10. If check_treatment_type() indicates the requested treatment is unavailable, inform the user and suggest alternatives.
+11. Always confirm the final booking details with the user before proceeding to appointment creation.
 ---
 
 ## BOOKING WORKFLOW (3 Stages - Must Complete in Order)
