@@ -52,6 +52,15 @@ All tools use google-api-python-client for direct Google Calendar API access
 ![Architecture](./Diagramma.png)
 
 
+## USE CASES
+
+### Booking
+
+![BookingAppointment](https://youtu.be/v3IPiA3jSa4)
+![ReschedulingAppointment](https://youtu.be/rN6lQHEzuew)
+![RemovingAppointment](https://youtu.be/t8ux50m9qfA)
+
+
 ## Session Management with ADK
 
 The system uses ADK's built-in resumability for multi-turn conversations:
