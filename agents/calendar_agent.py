@@ -47,6 +47,9 @@ from tools.calendar_tools import (
     is_it_holiday
 )
 
+from google.adk.agents.callback_context import CallbackContext
+from google.genai import types
+from typing import Optional
 
 treatment_information_agent = LlmAgent(
     name="TreatmentInformationAgent",
@@ -179,7 +182,14 @@ corrector_agent = LlmAgent(
 )
 
 
-    
+def before_slot_finder_callback(callback_context: CallbackContext) -> Optional[types.Content]:
+    """Callback to set validated date context before FindAvailableSlotAgent runs"""
+    validated_datetime = callback_context.shared_context.get("validated_datetime")
+    if validated_datetime:
+        return types.Content(
+            text=f"Use the date {validated_datetime['date']} for finding available slots."
+        )
+    return None
     
 
 # 2. Specialist Agent for Finding Available Slots and Treatment Info
@@ -204,7 +214,8 @@ find_slot_agent = LlmAgent(
         FunctionTool(func=check_treatment_type),
         FunctionTool(func=return_available_slots)
         
-    ]
+    ],
+    before_agent_callback=before_slot_finder_callback,
 )
 
 # 3. Specialist Agent for Appointment Operations
@@ -252,7 +263,8 @@ appointment_crud_agent = LlmAgent(
 
 date_and_slot_finder_agent = SequentialAgent(
     name="DateAndSlotFinderAgent",
-    description="Agent to handle date parsing and slot finding. First use the Corrector Agent to get the Date requested by the user in proper 'YYYY-MM-DD' format." 
+    description="Agent to handle date parsing and slot finding. First use the Corrector Agent to get the Date requested by the user in proper 'YYYY-MM-DD' format."
+    "If the input indicates that the date is a holiday, inform the user and ask for an alternative date." 
     "Call Find Avaiilable Slot Agent with the corrected date to get available slots."
     "Return the response in clear natural language regarding date and available slots.",
     sub_agents=[corrector_agent, find_slot_agent])
@@ -302,10 +314,11 @@ Before proceeding with booking, verify ALL five required fields are present:
 ✓ Phone
 
 **Slot Availability Check:**
-1. Delegate to `DateAndSlotFinderAgent` with the requested date
-2. If slots available at requested time → proceed to Stage 3
-3. If no slots available → inform user and ask for alternative date
-4. Return to Stage 1 if new date needed
+0. Call the CorrectorAgent to ensure date is in ISO format or to check for holidays.
+1. Delegate to `DateAndSlotFinderAgent` with the requested date.
+2. If slots available at requested time → proceed to Stage 3.
+3. If no slots available → inform user and ask for alternative date.
+4. Return to Stage 1 if new date needed.
 
 **STRICT GUARD**: If ANY field is missing, respond ONLY with:
 "To proceed with booking, I still need: [comma-separated missing fields]"
