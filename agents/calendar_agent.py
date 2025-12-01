@@ -1,16 +1,20 @@
 """
-@DOCS
-The calendar_agent is responsible for managing database interactions related 
-to client and treatment information.
-It provides functionalities to add new clients, retrieve client details, 
-and list available treatments from the database.
+Calendar Agent Module - Google Calendar API Integration
 
-The agent uses Google Calendar API to manage appointments including booking, 
-rescheduling, and cancelling. It uses two SubAgents:
+This module manages appointment operations using Google Calendar API with a 
+clean multi-agent architecture:
 
-    1. CorrectorAgent: Validates and formats date/time inputs into ISO format.
-    2. AppointmentCRUD: Handles appointment operations (insert, delete, move) in Google Calendar.
+Agent Hierarchy:
+    1. CorrectorAgent: Parses date expressions and normalizes time formats
+    2. FindAvailableSlotAgent: Queries available slots and treatment information (read-only)
+    3. AppointmentCRUD: Executes all CRUD operations (insert, delete, move) with availability checking
+    4. CalendarAgent: Main orchestrator coordinating SubAgents for booking workflows
 
+Workflow:
+    Booking → CalendarAgent collects info → validates completeness → delegates to AppointmentCRUD
+    Queries → CalendarAgent uses direct tools or delegates to FindAvailableSlotAgent
+    Date parsing → Always via CorrectorAgent
+    CRUD operations → Always via AppointmentCRUD (includes availability checks)
 """
 
 
@@ -20,6 +24,7 @@ from . import (
     AgentTool,
     retry_config,
     FunctionTool,
+    SequentialAgent,
 )
 
 from tools.calendar_tools import (
@@ -27,175 +32,203 @@ from tools.calendar_tools import (
     delete_appointment,
     move_appointment,
     get_current_date,
+    parse_date_expression,
     check_availability,
-    find_next_available_slot
+    find_next_available_slot,
+    check_treatment_type,
+    return_available_slots
 )
 
-# 1. Specialist Agent for Validation
+
+
+# 1. Specialist Agent for Date/Time Parsing and Validation
 corrector_agent = LlmAgent(
     name="CorrectorAgent",
     model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
-    instruction="""You are a date/time validator and formatter.
-    
-    IMPORTANT: Always call the get_current_date tool first to get today's date before processing any date/time inputs.
-    
-    Your task is to convert any date/time input into ISO format (YYYY-MM-DD for dates, HH:MM for times).
-    
-    Date Conversion Rules:
-    - If only a day number is provided (e.g., "6th", "15th", "on the 23rd"):
-      * Compare the day with today's date (from get_current_date tool)
-      * If that day has already passed in the current month, use that day in the NEXT month
-      * If that day hasn't passed yet in the current month, use that day in the CURRENT month
-      * Always use the current year (or next year if needed)
-    
-    - If day and month are provided (e.g., "15th December", "March 3rd"):
-      * Use the current year
-      * If the date has already passed this year, use next year
-    
-    - If full date is provided (e.g., "2025-12-06", "December 6th 2026"):
-      * Use the exact date provided
-    
-    - For relative dates (e.g., "tomorrow", "next Monday", "in 3 days"):
-      * Calculate the exact date based on today's date from get_current_date
-    
-    Time Conversion Rules:
-    - Convert to 24-hour format (HH:MM)
-    - Handle AM/PM notation (e.g., "3:30 PM" → "15:30")
-    - If only hour is given (e.g., "3pm", "15"), assume ":00" minutes
-    - Default to "09:00" if no time is specified
-    
-    IMPORTANT: You must always respond with text containing the validated date and time.
-    
-    Examples (assuming today is 2025-11-26):
-    - Input: "on 6th" → Output: "Validated date: 2025-12-06"
-    - Input: "on 30th" → Output: "Validated date: 2025-11-30"
-    - Input: "March 15" → Output: "Validated date: 2026-03-15"
-    - Input: "3:30 PM" → Output: "Validated time: 15:30"
-    - Input: "tomorrow at 2pm" → Output: "Validated date: 2025-11-27, time: 14:00"
-    
-    Always respond with the validated ISO format date and time in clear text.
+     instruction="""Parse date expressions into ISO format (YYYY-MM-DD) and normalize time to 24-hour format.
+
+    Process:
+    1. Call get_current_date() to establish reference date
+    2.  Call parse_date_expression() on the date given by the user to resolve to ISO date
+        - AM: 12 AM→00:00, 1-11 AM→01:00-11:00
+        - PM: 12 PM→12:00, 1-11 PM→13:00-23:00
+    3. Always outputs the normalized date and time in YYYY-MM-DD, time: HH:MM format.
     """,
     tools=[
-        FunctionTool(func=get_current_date)
+        FunctionTool(func=get_current_date),
+        FunctionTool(func=parse_date_expression)
     ]
 )
 
-# 2. Specialist Agent for Finding Available Slots
+# 2. Specialist Agent for Finding Available Slots and Treatment Info
 find_slot_agent = LlmAgent(
     name="FindAvailableSlotAgent",
     model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
-    instruction="""You find the next available time slot in the calendar.
+     instruction="""Find available appointment slots.
     
-    Your task:
-    1. Call find_next_available_slot with the starting date and time
-    2. The function will search forward in 1-hour increments (up to 10 slots by default)
-    3. ALWAYS return a clear text response with the results
-    
-    IMPORTANT: You must always respond with text. Never return an empty response.
-    
-    Example responses:
-    - "✅ The next available slot is on 2025-12-06 at 15:00 (checked 2 slots)"
-    - "❌ No available slots found in the next 10 hours after the requested time"
+    Workflow:
+        1. If the user provides a relative date (e.g., "tomorrow", "next Monday"), use CorrectorAgent to parse it into ISO format.
+        2. Execute appropriate query based on the request:
+           - All slots on a specific date → return_available_slots(iso_date)
+           - Next available slot after a specific time → find_next_available_slot(iso_date, time)
+           - Check if a specific slot is available → check_availability(iso_date, time)
+        3. Provide a clear, formatted response containing the available slots.
     """,
     tools=[
+        AgentTool(agent=corrector_agent),
+        FunctionTool(func=find_next_available_slot),
+        FunctionTool(func=return_available_slots),
+        FunctionTool(func=check_availability),
+    ]
+)
+
+# 3. Specialist Agent for Appointment Operations
+appointment_crud_agent = LlmAgent(
+    name="AppointmentCRUD",
+    model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
+    instruction="""Execute appointment operations with availability validation.
+    
+    This agent handles booking, canceling, and rescheduling appointments.
+    It receives date/time directly as parameters (can be relative like "tomorrow" or absolute).
+    
+    CRITICAL WORKFLOW:
+    Before insert_appointment() or move_appointment():
+    
+    Step 1: PARSE DATE - ALWAYS DO THIS FIRST
+    - ALWAYS call get_current_date() first to get today's date
+    - If date contains words like "tomorrow", "today", "next Monday", "in 3 days", etc:
+      → MUST call parse_date_expression(date_string) to convert to ISO format YYYY-MM-DD
+      → Example: parse_date_expression("tomorrow") → "2025-12-02"
+    - If date is already in YYYY-MM-DD format, verify it's not in the past by checking get_current_date()
+    - Extract the ISO date from the parse result
+    
+    Step 2: NORMALIZE TIME
+    - Ensure time is in HH:MM format (24-hour)
+    - Convert "11am" → "11:00", "3pm" → "15:00"
+    
+    Step 3: CHECK AVAILABILITY
+    - Call check_availability(iso_date, normalized_time) using the parsed values
+    - Handle the response based on status:
+       
+       a) If status == 'approved' and is_available == True:
+          → ONLY NOW proceed with insert_appointment() or move_appointment()
+       
+       b) If status == 'pending':
+          → The slot is OCCUPIED - DO NOT call insert_appointment()!
+          → An alternative_date and alternative_time are suggested
+          → Verify alternative: call check_availability(alternative_date, alternative_time)
+          → If alternative shows status == 'approved': offer it to user
+             "The requested time [original] is occupied. Would you like [alternative_date] at [alternative_time] instead?"
+          → If alternative also occupied: call find_next_available_slot() and offer that
+          → WAIT for user confirmation before booking any alternative
+       
+       c) If status == 'rejected':
+          → DO NOT call insert_appointment()!
+          → The time is outside business hours or another error occurred
+          → Respond with the error message from the tool
+    
+    Required parameters:
+    - insert: full_name, email, phone, date, time, treatment (optional)
+    - delete: email OR phone
+    - move: email OR phone + new_date + new_time
+
+    Do NOT attempt an insert unless ALL of these are present and non-empty!
+    
+    CRITICAL RULES:
+    1. ALWAYS parse dates using get_current_date() and parse_date_expression() BEFORE checking availability
+    2. NEVER use hardcoded dates - always parse relative date expressions
+    3. NEVER call insert_appointment() or move_appointment() if check_availability() returns status 'pending' or 'rejected'
+    4. ONLY call insert_appointment() when check_availability() returns status 'approved' with is_available == True
+    5. For pending/rejected status, offer alternatives but DO NOT book without user confirmation
+    
+    POST-OPERATION, WRITE A FINAL MESSAGE:
+    - Insert: "Appointment booked for [full_name] on [date] at [time]. Calendar link: [public_add_link]"
+    - Delete: "Appointment cancelled."
+    - Move: "Appointment rescheduled for [full_name] to [date] at [time]. Calendar link: [public_add_link]"
+    - Pending/Alternative: "The requested time is occupied. [Alternative time offer]"
+    - Unavailable: "That slot is unavailable. Please choose another time."
+    - Missing params: "I need [missing info]."
+    """,
+    tools=[
+        FunctionTool(func=get_current_date),
+        FunctionTool(func=parse_date_expression),
+        FunctionTool(func=insert_appointment),
+        FunctionTool(func=delete_appointment),
+        FunctionTool(func=move_appointment),
+        FunctionTool(func=check_availability),
         FunctionTool(func=find_next_available_slot)
     ]
 )
 
-# 3. Specialist Agent for Availability Checking
-availability_agent = LlmAgent(
-    name="AvailabilityAgent",
+# 4. Specialist Agent for Treatment Information
+treatments_info_agent = LlmAgent(
+    name="TreatmentsInfoAgent",
     model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
-    instruction="""You check if a time slot is available in the calendar.
+     instruction="""Provide information about available treatments and appointment slots.  
     
-    Your task:
-    1. Call check_availability tool with the provided date and time
-    2. Check the response status:
-       - If status is 'approved' and is_available is True: The slot is free, proceed with booking
-       - If status is 'pending': The slot is occupied and an alternative time has been suggested - inform the user they need to respond
-       - If status is 'rejected': Either the user declined the alternative or there was an error
-    3. ALWAYS return a clear text response describing the status
-    
-    IMPORTANT: You must always respond with text. Never return an empty response.
-    
-    Example responses:
-    - "✅ The time slot 2025-12-06 at 14:00 is available and ready for booking."
-    - "⏸️ The time slot 2025-12-06 at 14:00 is occupied. Alternative time suggested: 15:00. Please respond yes or no."
-    - "✅ Alternative time slot 15:00 has been approved and is ready for booking."
-    - "❌ The slot is not available and no alternatives were found."
+     IF asked about all available treatments:
+        - call the check_treatment_type() tool which returns a list of all available treatments.
+
+    ELSE IF asked about a specific treatment:
+        - call the check_treatment_type([treatment_name]) tool which returns if [treatment_name] is available.
+
+    It returns the list of available treatments or availability status [TRUE, FALSE] of the specific treatment.
     """,
     tools=[
-        FunctionTool(func=check_availability)
+        FunctionTool(func=check_treatment_type)
     ]
 )
 
-# 4. Specialist Agent for Appointment Operations
-appointment_crud_agent = LlmAgent(
-    name="AppointmentCRUD",
-    model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
-    instruction="""You handle appointment database operations.
-        If the user asks for Scheduling (INSERT) an appointment:
-            1. Ask for: full_name, email, phone, date, time
-            2. Proceed to call the insert_appointment tool.
-        
-        If the user asks for Cancelling (DELETE) an appointment:
-            1. Ask for: email OR phone to identify the appointment
-            2. Proceed to call the delete_appointment tool.
-
-        If the user asks for Moving (MOVE) an appointment:
-            1. Ask for: email OR phone to identify the appointment, new_date, new_time
-            2. Proceed to call the move_appointment tool.
-        
-        After receiving the final result, provide a clear summary including:
-            - Order status (approved/rejected)
-            - date and time of the appointment (if applicable)
-        
-        Always validate that required fields are present before calling tools.
-    """,
-    tools=[
-        FunctionTool(func=insert_appointment),
-        FunctionTool(func=delete_appointment),
-        FunctionTool(func=move_appointment)
-    ]
-)
 
 # 5. Main Orchestrator Agent
 calendar_agent = LlmAgent(
     name="CalendarAgent",
     model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
-    instruction="""
-    You are a Calendar coordinator.
+    instruction="""Calendar orchestrator that manages appointment bookings and queries.
+
+    AVAILABLE TOOLS:
+     - CorrectorAgent: Parse date expressions (e.g., "tomorrow", "next Monday") into normalized format
+        * Use when: user provides a relative date that needs parsing
+     
+     - FindAvailableSlotAgent: Query available appointment slots
+        * Use for: finding available slots, checking specific dates, "earliest possible" requests
+     
+     - AppointmentCRUD: Complete booking workflow (can parse dates + perform operation)
+        * Use for: booking appointments, cancelling, rescheduling
+        * Pass: full_name, email, phone, date (can be "tomorrow"), time, treatment
+        * This agent can parse relative dates like "tomorrow" and perform the booking
+
+    BOOKING FLOW:
+    1) COLLECT required information by asking the user:
+        - Date/time: If not provided, ask "When would you like to book?"
+        - Treatment: Ask if not mentioned, default to "General Consultation"
+        - Contact: full_name, email, phone
+        
+    2) Once ALL information is collected:
+        - Call AppointmentCRUD ONCE with: full_name, email, phone, date (raw like "tomorrow"), time, treatment
+        - The agent will parse dates internally if needed and perform the booking
+        - Present the result to the user EXACTLY as returned by AppointmentCRUD
+        - DO NOT call AppointmentCRUD again - just relay the message
+        
+    3) If AppointmentCRUD returns an alternative time offer:
+        - Pass it to the user VERBATIM
+        - DO NOT call any tools again
+        - Let the user respond with confirmation or new request
     
-    Workflow for BOOKING appointments:
-    1. Use CorrectorAgent to validate and convert date/time formats to ISO format
-    2. Use check_availability tool DIRECTLY to check if the time slot is available
-       - If status='approved' and is_available=True: Proceed to booking
-       - If status='pending': STOP and inform user an alternative has been suggested, they must respond yes/no
-       - If status='rejected': Inform user the slot cannot be booked
-    3. Once status='approved', use AppointmentCRUD to book the appointment
-    4. Provide clear confirmation to the user with booking details
-    
-    Workflow for CANCELLING appointments:
-    1. Use AppointmentCRUD directly to cancel
-    
-    Workflow for RESCHEDULING appointments:
-    1. Use CorrectorAgent to validate new date/time
-    2. Use check_availability to verify new slot
-    3. If approved, use AppointmentCRUD to reschedule
-    
-    IMPORTANT: 
-    - When check_availability returns status='pending', DO NOT proceed with booking
-    - The user must respond yes/no to the alternative time first
-    - Always provide clear text responses
-    
-    Keep your role focused on coordination.
+    QUERY FLOW:
+    - For "earliest possible/ASAP/soonest" → call FindAvailableSlotAgent
+    - For "available on [date]" → call FindAvailableSlotAgent
+    - For date parsing only → call CorrectorAgent
+
+    CRITICAL: 
+    - Call AppointmentCRUD only ONCE per booking request
+    - Do NOT re-call AppointmentCRUD when relaying its response to the user
+    - If user says "yes" to an alternative time, treat it as a NEW booking request with the alternative time
     """,
     tools=[
         AgentTool(agent=corrector_agent),
-        FunctionTool(func=check_availability),  # Use directly, not through agent
         AgentTool(agent=find_slot_agent),
         AgentTool(agent=appointment_crud_agent)
     ]
 )
-
 
