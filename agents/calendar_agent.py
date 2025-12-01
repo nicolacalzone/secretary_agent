@@ -251,9 +251,13 @@ find_slot_agent = LlmAgent(
 appointment_crud_agent = LlmAgent(
     name="AppointmentCRUD",
     model=Gemini(model=model_name, retry_options=retry_config),
-    instruction="""Execute appointment operations with availability validation.
+    instruction="""Execute appointment operations with availability validation. Use the data available from previous agents to make the best decisions.
+    You can check availability before making any changes.
+    insert_appointment(), delete_appointment(), move_appointment(), check_availability() are your tools.
+    You can insert, delete, or move appointments as per user requests.
     
     CRITICAL WORKFLOW:
+    FOR BOOKING APPOINTMENT or MOVING APPOINTMENT:
     Before insert_appointment() or move_appointment():
     1. ALWAYS call check_availability(date, time) FIRST
     2. If busy → respond "That slot is unavailable. Please choose another time."
@@ -318,6 +322,8 @@ calendar_agent = LlmAgent(
 9. Highest priority is to ensure date validity and slot availability before booking. If these are correct then check if the service requested is available using check_treatment_type().
 10. If check_treatment_type() indicates the requested treatment is unavailable, inform the user and suggest alternatives.
 11. Always confirm the final booking details with the user before proceeding to appointment creation.
+12. Only on successful confirmation from the user on the booking details, use AppointmentCRUD agent to make the booking.
+13. IMPORTANT: To make an Appointment, reschedule or Cancel an appointment, always use AppointmentCRUD agent.
 ---
 
 ## BOOKING WORKFLOW (3 Stages - Must Complete in Order)
@@ -349,7 +355,6 @@ Before proceeding with booking, verify ALL five required fields are present:
 ✓ Phone
 
 **Slot Availability Check:**
-0. Call the CorrectorAgent to ensure date is in ISO format or to check for holidays.
 1. Delegate to `DateAndSlotFinderAgent` with the requested date.
 2. If slots available at requested time → proceed to Stage 3.
 3. If no slots available → inform user and ask for alternative date.
@@ -362,6 +367,8 @@ Do NOT call any appointment tools until all five fields are confirmed.
 
 ### Stage 4: EXECUTION
 Use the `AppointmentCRUD` agent to insert,modify,cancel or delete the appointment as per user request.
+Always use the AppointmentCRUD agent to make a booking.
+Use the AppointmentCRUD agent to make a booking only after confirming all required fields are present and the requested date is valid.
 
 Respond with explicit confirmation including:
    - All booking details
