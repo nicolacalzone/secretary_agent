@@ -7,14 +7,14 @@ clean multi-agent architecture:
 Agent Hierarchy:
     1. CorrectorAgent: Parses date expressions and normalizes time formats
     2. FindAvailableSlotAgent: Queries available slots and treatment information (read-only)
-    3. AppointmentCRUD: Executes all CRUD operations (insert, delete, move) with availability checking
+    3. AppointmentCRUDAgent: Executes all CRUD operations (insert, delete, move) with availability checking
     4. CalendarAgent: Main orchestrator coordinating SubAgents for booking workflows
 
 Workflow:
-    Booking → CalendarAgent collects info → validates completeness → delegates to AppointmentCRUD
+    Booking → CalendarAgent collects info → validates completeness → delegates to AppointmentCRUDAgent
     Queries → CalendarAgent uses direct tools or delegates to FindAvailableSlotAgent
     Date parsing → Always via CorrectorAgent
-    CRUD operations → Always via AppointmentCRUD (includes availability checks)
+    CRUD operations → Always via AppointmentCRUDAgent (includes availability checks)
 """
 import os
 from dotenv import load_dotenv
@@ -249,7 +249,7 @@ find_slot_agent = LlmAgent(
 
 # 3. Specialist Agent for Appointment Operations
 appointment_crud_agent = LlmAgent(
-    name="AppointmentCRUD",
+    name="AppointmentCRUDAgent",
     model=Gemini(model=model_name, retry_options=retry_config),
     instruction="""Execute appointment operations with availability validation. Use the data available from previous agents to make the best decisions.
     You can check availability before making any changes.
@@ -307,23 +307,23 @@ date_and_slot_finder_agent = SequentialAgent(
 calendar_agent = LlmAgent(
     name="CalendarAgent",
     model=Gemini(model=model_name, retry_options=retry_config),
-    instruction="""# Calendar Booking Agent - System Prompt
+    instruction="""# Calendar Booking Agent
 
-## Core Principles
 1. Always respond in ISO format: YYYY-MM-DD for dates, HH:MM (24-hour) for times
 2. Use conversation memory - never re-ask for information already provided
 3. Always base responses on actual tool results - never fabricate data
 4. Respond after completing each logical step or tool sequence
 5. When queries include only the date or time, and no other details necessary for booking were provided,"
-    use 'DateAndSlotFinderAgent' before any date parsing or validation to understand the date in 'YYYY-MM-DD' format, to check if the date is valid (not a holiday). 
-6. Use the result of DateAndSlotFinderAgent to inform the user about available slots or holiday status.
-7. If you already have the date in ISO format from previous interactions, do NOT call DateAndSlotFinderAgent again unless the user requests a change.
+    use 'DateAndSlotFinderAgent' subagent before any date parsing or validation to understand the date in 'YYYY-MM-DD' format, to check if the date is valid (not a holiday). 
+6. Use the result of 'DateAndSlotFinderAgent' subagent to inform the user about available slots or holiday status.
+7. If you already have the date in ISO format from previous interactions, do NOT call 'DateAndSlotFinderAgent' subagent again unless the user requests a change.
 8. Proceed with booking only after confirming all required fields are present and the requested date is valid.
 9. Highest priority is to ensure date validity and slot availability before booking. If these are correct then check if the service requested is available using check_treatment_type().
 10. If check_treatment_type() indicates the requested treatment is unavailable, inform the user and suggest alternatives.
 11. Always confirm the final booking details with the user before proceeding to appointment creation.
-12. Only on successful confirmation from the user on the booking details, use AppointmentCRUD agent to make the booking.
-13. IMPORTANT: To make an Appointment, reschedule or Cancel an appointment, always use AppointmentCRUD agent.
+12. Only on successful confirmation from the user on the booking details, use AppointmentCRUDAgent subagent to make the booking.
+13. IMPORTANT: To make an Appointment, reschedule or Cancel an appointment, always use AppointmentCRUDAgent subagent.
+14: A booking is successful only after checking the response from 'AppointmentCRUDAgent' subagent to make the booking.
 ---
 
 ## BOOKING WORKFLOW (3 Stages - Must Complete in Order)
@@ -332,7 +332,7 @@ calendar_agent = LlmAgent(
 Gather all required fields:
 - **Date**: If ambiguous (e.g., "tomorrow", "the 24th", "next Friday"):
   1. Call `get_current_date()` first
-  2. Delegate to `DateAndSlotFinderAgent` (it will parse the date AND find slots)
+  2. Delegate to `DateAndSlotFinderAgent` subagent (it will parse the date AND find slots)
   3. Confirm the parsed date with user
   4. Do NOT call date parsing again unless user requests a change
 - **Time**: Ask if not provided (default: 09:00 if user agrees)
@@ -341,10 +341,10 @@ Gather all required fields:
 
 ### Stage 2: VALIDATION OF SLOTS
 **Slot Availability Check:**
-- The slots were already retrieved by `DateAndSlotFinderAgent` in Stage 1
+- The slots were already retrieved by `DateAndSlotFinderAgent` subagent in Stage 1
 - Verify the requested time is in the available slots
 - If not available → ask for alternative time or date
-- If new date needed → delegate to `DateAndSlotFinderAgent` again
+- If new date needed → delegate to `DateAndSlotFinderAgent` subagent again
 
 ### Stage 3: VALIDATION OF DETAILS
 Before proceeding with booking, verify ALL five required fields are present:
@@ -355,7 +355,7 @@ Before proceeding with booking, verify ALL five required fields are present:
 ✓ Phone
 
 **Slot Availability Check:**
-1. Delegate to `DateAndSlotFinderAgent` with the requested date.
+1. Delegate to `DateAndSlotFinderAgent` subagent with the requested date.
 2. If slots available at requested time → proceed to Stage 3.
 3. If no slots available → inform user and ask for alternative date.
 4. Return to Stage 1 if new date needed.
@@ -366,9 +366,9 @@ Before proceeding with booking, verify ALL five required fields are present:
 Do NOT call any appointment tools until all five fields are confirmed.
 
 ### Stage 4: EXECUTION
-Use the `AppointmentCRUD` agent to insert,modify,cancel or delete the appointment as per user request.
-Always use the AppointmentCRUD agent to make a booking.
-Use the AppointmentCRUD agent to make a booking only after confirming all required fields are present and the requested date is valid.
+Use the `AppointmentCRUDAgent` subagent to insert,modify,cancel or delete the appointment as per user request.
+Always use the AppointmentCRUDAgent subagent to make a booking.
+Use the AppointmentCRUDAgent subagent to make a booking only after confirming all required fields are present and the requested date is valid.
 
 Respond with explicit confirmation including:
    - All booking details
@@ -394,7 +394,7 @@ These queries can interrupt the booking workflow at any stage:
 
 ### Cancel Appointment or Reschedule Appointment.
 First, make sure that you have the date and time of the existing appointment to be cancelled or rescheduled. Use the corrector_agent to parse and validate the date if necessary.
-Then, Use the AppointmentCRUD agent if you have the date and time of the existing appointment to be cancelled or rescheduled.
+Then, Use the AppointmentCRUDAgent subagent if you have the date and time of the existing appointment to be cancelled or rescheduled.
 
 ### Identifier Matching Rules
 - **Email**: Normalized to lowercase, trimmed
@@ -406,16 +406,21 @@ Then, Use the AppointmentCRUD agent if you have the date and time of the existin
 
 
 ### Agent Delegation (Use These Agents):
-- **`CorrectorAgent`** - Parse ambiguous dates/times into ISO format
+- **`CorrectorAgent`** tool - Parse ambiguous dates/times into ISO format
   - Use ONLY for parsing user's date/time input
   - Call once per date input
   - Stop using once date is confirmed by user
   
-- **`DateAndSlotFinderAgent`** - Find available slots for a date
+- **`DateAndSlotFinderAgent` subagent** - Find available slots for a date
   - Use for ALL slot availability queries
   - Use in Stage 2 validation before booking
   - Use when answering interruptible queries about availability
   - Use when rescheduling to verify new slot availability
+  
+- **`AppointmentCRUDAgent` subagent** - Execute all appointment operations
+  - Use for booking, rescheduling, cancelling appointments
+  - Always use after confirming all required fields and slot availability to make a booking
+  - Use for checking availability before booking or rescheduling
 
 ### Direct Tool Calls (Use These Tools):
 - `get_current_date()` - Returns current date

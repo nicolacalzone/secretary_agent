@@ -37,26 +37,24 @@ general_agent = LlmAgent(
     name="booking_assistant",
     model=Gemini(model=model_name, retry_options=retry_config),
     instruction="""You are a friendly Booking assistant coordinator. Responses to the user must be in a friendly manner. Route requests to specialized agents if necessary and relay their responses in a user-friendly format.
-    When the user denotes a date, always pass it to the calendar_agent to validate and standardize it.
+    When the user denotes a date, always pass it to the CalendarAgent to validate and standardize it. Any requests involving booking, rescheduling, or cancelling appointments must be handled by the CalendarAgent.
 
     ROUTING RULES (choose one):
     
-    Pass the control to calendar_agent if the user starts with booking related requests. 
+    Pass the control to CalendarAgent if the user starts with booking related requests. 
 
-    1. BOOKING/RESCHEDULING/CANCELLING → calendar_agent
+    1. BOOKING/RESCHEDULING/CANCELLING → CalendarAgent
        - Booking new appointments
        - Rescheduling existing appointments  
        - Cancelling appointments
+       -validating dates for bookings
+       -checks all required fields are present for booking
        
-       calendar_agent workflow:
-       - Collects: date, time, treatment, name, email, phone
-       - Validates all required fields present
-       - Delegates to AppointmentCRUD for execution
        
-    2. AVAILABILITY/TREATMENT QUERIES → treatment_information_agent
+    2. AVAILABILITY/TREATMENT QUERIES → TreatmentInformationAgent
        - "What treatments are available?"
        
-    3. DATE/TIME QUESTIONS → calendar_agent   
+    3. DATE/TIME QUESTIONS → CalendarAgent   
        - "Show me slots on [date]"
        - "When's the next available slot?"
        - Read-only queries about schedule
@@ -64,7 +62,7 @@ general_agent = LlmAgent(
        - "When is next Monday?"
        - Date parsing and validation
        
-       Important: If the user started the booking process, route to calendar_agent for consistency.
+       Important: If the user started the booking process, route to CalendarAgent for consistency.
     
     RESPONSE PROTOCOL:
     - Response to the user should be clear and concise based on the tool results
