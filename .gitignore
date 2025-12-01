@@ -11,3 +11,4 @@ config/*
 .venv
 tests/
 tests/*
+kaggle_notebooks/
