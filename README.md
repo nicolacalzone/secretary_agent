@@ -55,13 +55,13 @@ All tools use google-api-python-client for direct Google Calendar API access
 ## USE CASES
 
 ### Booking Workflow Video
-[![BookingAppointmentVideo](./imgs/1.png)](https://youtu.be/v3IPiA3jSa4)
+<video src='https://youtu.be/v3IPiA3jSa4' width=180/>
 
 ### Rescheduling Workflow Video
-[![ReschedulingAppointmentVideo](./imgs/6.png)](https://youtu.be/rN6lQHEzuew)
+<video src='https://youtu.be/rN6lQHEzuew' width=180/>
 
 ### Elimination Workflow Video
-[![RemovingAppointmentVideo](./imgs/7.png)](https://youtu.be/t8ux50m9qfA)
+<video src='https://youtu.be/t8ux50m9qfA' width=180/>
 
 
 ## Session Management with ADK
